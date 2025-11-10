@@ -23,10 +23,10 @@ class TVShowSchema(BaseModel):
     imdb_id: Optional[str] = None
     db_index: int 
     title: str 
-    genres: List[str] 
+    genres: Optional[List[str]] = None
     description: Optional[str] = None 
-    rating: float 
-    release_year: int 
+    rating: Optional[float] = None
+    release_year: Optional[int] = None
     poster: Optional[str] = None 
     backdrop: Optional[str] = None 
     logo: Optional[str] = None
@@ -39,10 +39,10 @@ class MovieSchema(BaseModel):
     imdb_id: Optional[str] = None
     db_index: int 
     title: str 
-    genres: List[str]
+    genres: Optional[List[str]] = None
     description: Optional[str] = None
-    rating: float
-    release_year: int
+    rating: Optional[float] = None
+    release_year: Optional[int] = None
     poster: Optional[str] = None 
     backdrop: Optional[str] = None
     logo: Optional[str] = None

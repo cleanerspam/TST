@@ -28,7 +28,7 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
     if (until_bytes > file_size - 1) or (from_bytes < 0) or (until_bytes < from_bytes):
         raise HTTPException(
             status_code=416,
-            detail="Range not satisfiable",
+            detail="Requested Range Not Satisfiable",
             headers={"Content-Range": f"bytes */{file_size}"},
         )
 
@@ -36,6 +36,7 @@ def parse_range_header(range_header: str, file_size: int) -> Tuple[int, int]:
 
 
 @router.get("/dl/{id}/{name}")
+@router.head("/dl/{id}/{name}")
 async def stream_handler(request: Request, id: str, name: str):
     decoded_data = await decode_string(id)
     if not decoded_data.get("msg_id"):
@@ -92,15 +93,25 @@ async def media_streamer(
     if not file_id.file_name and "/" in mime_type:
         file_name = f"{secrets.token_hex(2)}.{mime_type.split('/')[1]}"
 
-    return StreamingResponse(
-        status_code=206 if range_header else 200,
-        content=body,
-        headers={
-            "Content-Type": mime_type,
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'inline; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-        },
-    )
+    headers = {
+        "Content-Type": mime_type,
+        "Content-Length": str(req_length),
+        "Content-Disposition": f'inline; filename="{file_name}"',
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600, immutable",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
+    }
     
+    if range_header:
+        headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
+        status_code = 206
+    else:
+        status_code = 200
+    
+    return StreamingResponse(
+        status_code=status_code,
+        content=body,
+        headers=headers,
+        media_type=mime_type,
+    )

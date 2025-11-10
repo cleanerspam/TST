@@ -43,7 +43,8 @@ async def file_receive_handler(client: Client, message: Message):
 
                 metadata_info = await metadata(clean_filename(title), int(channel), msg_id)
                 if metadata_info is None:
-                    return await message.reply_text("> Not added, check log")
+                    LOGGER.warning(f"Metadata failed for file: {title} (ID: {msg_id})")
+                    return
 
                 title = remove_urls(title)
                 if not title.endswith(('.mkv', '.mp4')):

@@ -87,41 +87,58 @@ class Database:
         return {"updated_on": DESCENDING}
 
     async def _paginate_collection(
-        self, collection_name: str, sort_dict: Dict[str, int],
-        page: int, page_size: int
-    ) -> Tuple[List[Any], List[int], int]:
+        self,
+        collection_name: str,
+        sort_dict: Dict[str, int],
+        page: int,
+        page_size: int,
+        filter_dict: Optional[dict] = None
+    ):
+        filter_dict = filter_dict or {}
         skip = (page - 1) * page_size
         results = []
-        dbs_checked = [self.current_db_index]
-        active_db_key = f"storage_{self.current_db_index}"
-        active_db = self.dbs[active_db_key]
-        total_active = await active_db[collection_name].count_documents({})
+        dbs_checked = []
+        total_count = 0
 
-        if skip < total_active:
-            cursor = active_db[collection_name].find({}).sort(sort_dict).skip(skip).limit(page_size)
-            results = await cursor.to_list(None)
-            remaining = page_size - len(results)
-            if remaining > 0 and self.current_db_index > 1:
-                prev_db_index = self.current_db_index - 1
-                prev_db_key = f"storage_{prev_db_index}"
-                prev_db = self.dbs[prev_db_key]
-                dbs_checked.append(prev_db_index)
-                prev_cursor = prev_db[collection_name].find({}).sort(sort_dict).limit(remaining)
-                results.extend(await prev_cursor.to_list(None))
-        else:
-            if self.current_db_index > 1:
-                prev_db_index = self.current_db_index - 1
-                prev_db_key = f"storage_{prev_db_index}"
-                prev_db = self.dbs[prev_db_key]
-                dbs_checked.append(prev_db_index)
-                cursor = prev_db[collection_name].find({}).sort(sort_dict).skip(skip - total_active).limit(page_size)
-                results = await cursor.to_list(None)
+        db_counts = []
+        for i in range(1, self.current_db_index + 1):
+            db_key = f"storage_{i}"
+            db = self.dbs[db_key]
+            count = await db[collection_name].count_documents(filter_dict)
+            db_counts.append((i, count))
+            total_count += count
 
-        total_prev = 0
-        if self.current_db_index > 1:
-            prev_db_key = f"storage_{self.current_db_index - 1}"
-            total_prev = await self.dbs[prev_db_key][collection_name].count_documents({})
-        total_count = total_active + total_prev
+        start_db_index = None
+        for db_index, count in reversed(db_counts):
+            if skip < count:
+                start_db_index = db_index
+                break
+            skip -= count
+
+        if not start_db_index:
+            return [], [], total_count
+
+        for db_index, count in reversed(db_counts):
+            if db_index < start_db_index:
+                continue
+
+            db_key = f"storage_{db_index}"
+            db = self.dbs[db_key]
+            dbs_checked.append(db_index)
+
+            cursor = (
+                db[collection_name]
+                .find(filter_dict)
+                .sort(sort_dict)
+                .skip(skip if db_index == start_db_index else 0)
+                .limit(page_size - len(results))
+            )
+
+            docs = await cursor.to_list(None)
+            results.extend(docs)
+
+            if len(results) >= page_size:
+                break
         return results, dbs_checked, total_count
 
     async def _move_document(
@@ -392,35 +409,35 @@ class Database:
             LOGGER.error(f"Failed to update TV show {tmdb_id} in {existing_db_key}: {e}")
             if any(keyword in str(e).lower() for keyword in ["storage", "quota"]):
                 return await self._handle_storage_error(self.update_tv_show, tv_show_data, total_storage_dbs=total_storage_dbs)
-
-    async def sort_tv_shows(
-        self, sort_params: List[Tuple[str, str]], page: int, page_size: int
-    ) -> dict:
+    
+    async def sort_movies(self, sort_params, page, page_size, genre_filter=None):
         sort_dict = self._get_sort_dict(sort_params)
-        results, dbs_checked, total_count = await self._paginate_collection("tv", sort_dict, page, page_size)
+        filter_dict = {"genres": {"$in": [genre_filter]}} if genre_filter else {}
+        results, dbs_checked, total_count = await self._paginate_collection(
+            "movie", sort_dict, page, page_size, filter_dict=filter_dict
+        )
         total_pages = (total_count + page_size - 1) // page_size
-
         return {
             "total_count": total_count,
             "total_pages": total_pages,
             "databases_checked": dbs_checked,
             "current_page": page,
-            "tv_shows": [convert_objectid_to_str(result) for result in results]
+            "movies": [convert_objectid_to_str(result) for result in results],
         }
 
-    async def sort_movies(
-        self, sort_params: List[Tuple[str, str]], page: int, page_size: int
-    ) -> dict:
+    async def sort_tv_shows(self, sort_params, page, page_size, genre_filter=None):
         sort_dict = self._get_sort_dict(sort_params)
-        results, dbs_checked, total_count = await self._paginate_collection("movie", sort_dict, page, page_size)
+        filter_dict = {"genres": {"$in": [genre_filter]}} if genre_filter else {}
+        results, dbs_checked, total_count = await self._paginate_collection(
+            "tv", sort_dict, page, page_size, filter_dict=filter_dict
+        )
         total_pages = (total_count + page_size - 1) // page_size
-
         return {
             "total_count": total_count,
             "total_pages": total_pages,
             "databases_checked": dbs_checked,
             "current_page": page,
-            "movies": [convert_objectid_to_str(result) for result in results]
+            "tv_shows": [convert_objectid_to_str(result) for result in results],
         }
 
 
@@ -567,9 +584,6 @@ class Database:
             return None
 
 
-
-
-
     # -------------------------------
     # DB Method for Edit Post
     # -------------------------------
@@ -640,10 +654,40 @@ class Database:
     # Delete a Movie or Tvshow completely
     async def delete_document(self, media_type: str, tmdb_id: int, db_index: int) -> bool:
         db_key = f"storage_{db_index}"
+
         if media_type == "Movie":
+            doc = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
+            if doc and "telegram" in doc:
+                for quality in doc["telegram"]:
+                    try:
+                        old_id = quality.get("id")
+                        if old_id:
+                            decoded_data = await decode_string(old_id)
+                            chat_id = int(f"-100{decoded_data['chat_id']}")
+                            msg_id = int(decoded_data['msg_id'])
+                            create_task(delete_message(chat_id, msg_id))
+                    except Exception as e:
+                        LOGGER.error(f"Failed to queue file for deletion: {e}")
+            
             result = await self.dbs[db_key]["movie"].delete_one({"tmdb_id": tmdb_id})
         else:
+            doc = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+            if doc and "seasons" in doc:
+                for season in doc["seasons"]:
+                    for episode in season.get("episodes", []):
+                        for quality in episode.get("telegram", []):
+                            try:
+                                old_id = quality.get("id")
+                                if old_id:
+                                    decoded_data = await decode_string(old_id)
+                                    chat_id = int(f"-100{decoded_data['chat_id']}")
+                                    msg_id = int(decoded_data['msg_id'])
+                                    create_task(delete_message(chat_id, msg_id))
+                            except Exception as e:
+                                LOGGER.error(f"Failed to queue file for deletion: {e}")
+            
             result = await self.dbs[db_key]["tv"].delete_one({"tmdb_id": tmdb_id})
+        
         if result.deleted_count > 0:
             LOGGER.info(f"{media_type} with tmdb_id {tmdb_id} deleted successfully.")
             return True
@@ -655,12 +699,29 @@ class Database:
     async def delete_movie_quality(self, tmdb_id: int, db_index: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
+        
         if not movie or "telegram" not in movie:
             return False
+
+        for q in movie["telegram"]:
+            if q.get("quality") == quality:
+                try:
+                    old_id = q.get("id")
+                    if old_id:
+                        decoded_data = await decode_string(old_id)
+                        chat_id = int(f"-100{decoded_data['chat_id']}")
+                        msg_id = int(decoded_data['msg_id'])
+                        create_task(delete_message(chat_id, msg_id))
+                except Exception as e:
+                    LOGGER.error(f"Failed to queue file for deletion: {e}")
+                break
+        
         original_len = len(movie["telegram"])
         movie["telegram"] = [q for q in movie["telegram"] if q.get("quality") != quality]
+        
         if len(movie["telegram"]) == original_len:
-            return False  
+            return False
+        
         movie['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["movie"].replace_one({"tmdb_id": tmdb_id}, movie)
         return result.modified_count > 0
@@ -669,17 +730,35 @@ class Database:
     async def delete_tv_episode(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+        
         if not tv or "seasons" not in tv:
             return False
+        
         found = False
         for season in tv["seasons"]:
             if season.get("season_number") == season_number:
+                for ep in season["episodes"]:
+                    if ep.get("episode_number") == episode_number:
+                        for quality in ep.get("telegram", []):
+                            try:
+                                old_id = quality.get("id")
+                                if old_id:
+                                    decoded_data = await decode_string(old_id)
+                                    chat_id = int(f"-100{decoded_data['chat_id']}")
+                                    msg_id = int(decoded_data['msg_id'])
+                                    create_task(delete_message(chat_id, msg_id))
+                            except Exception as e:
+                                LOGGER.error(f"Failed to queue file for deletion: {e}")
+                        break
+                
                 original_len = len(season["episodes"])
                 season["episodes"] = [ep for ep in season["episodes"] if ep.get("episode_number") != episode_number]
                 found = original_len > len(season["episodes"])
                 break
+        
         if not found:
             return False
+        
         tv['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
@@ -688,12 +767,31 @@ class Database:
     async def delete_tv_season(self, tmdb_id: int, db_index: int, season_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+        
         if not tv or "seasons" not in tv:
             return False
+        
+        for season in tv["seasons"]:
+            if season.get("season_number") == season_number:
+                for episode in season.get("episodes", []):
+                    for quality in episode.get("telegram", []):
+                        try:
+                            old_id = quality.get("id")
+                            if old_id:
+                                decoded_data = await decode_string(old_id)
+                                chat_id = int(f"-100{decoded_data['chat_id']}")
+                                msg_id = int(decoded_data['msg_id'])
+                                create_task(delete_message(chat_id, msg_id))
+                        except Exception as e:
+                            LOGGER.error(f"Failed to queue file for deletion: {e}")
+                break
+        
         original_len = len(tv["seasons"])
         tv["seasons"] = [s for s in tv["seasons"] if s.get("season_number") != season_number]
+        
         if len(tv["seasons"]) == original_len:
-            return False  
+            return False
+        
         tv['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
@@ -702,22 +800,39 @@ class Database:
     async def delete_tv_quality(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+        
         if not tv or "seasons" not in tv:
             return False
+        
         found = False
         for season in tv["seasons"]:
             if season.get("season_number") == season_number:
                 for episode in season["episodes"]:
                     if episode.get("episode_number") == episode_number and "telegram" in episode:
+                        for q in episode["telegram"]:
+                            if q.get("quality") == quality:
+                                try:
+                                    old_id = q.get("id")
+                                    if old_id:
+                                        decoded_data = await decode_string(old_id)
+                                        chat_id = int(f"-100{decoded_data['chat_id']}")
+                                        msg_id = int(decoded_data['msg_id'])
+                                        create_task(delete_message(chat_id, msg_id))
+                                except Exception as e:
+                                    LOGGER.error(f"Failed to queue file for deletion: {e}")
+                                break
+                        
                         original_len = len(episode["telegram"])
                         episode["telegram"] = [q for q in episode["telegram"] if q.get("quality") != quality]
                         found = original_len > len(episode["telegram"])
                         break
+        
         if not found:
             return False
         tv['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
+
 
     # Get per-DB statistics (movies, tv shows, used size, etc.)
     async def get_database_stats(self):
