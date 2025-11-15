@@ -153,6 +153,7 @@ async def restart_notification():
 commands = [
     BotCommand("start", "🚀 Start the bot"),
     BotCommand("set", "🎬 Manually add IMDb metadata"),
+    BotCommand("fixmetadata", "⚙️ Fix empty fields of Metadata"),
     BotCommand("log", "📄 Send the log file"),
     BotCommand("restart", "♻️ Restart the bot"),
 ]
@@ -169,4 +170,3 @@ async def setup_bot_commands(bot: Client):
         LOGGER.info("Bot commands updated successfully.")
     except Exception as e:
         LOGGER.error(f"Error setting up bot commands: {e}")
-
