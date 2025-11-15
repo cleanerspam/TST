@@ -3,20 +3,21 @@ from typing import Optional
 from urllib.parse import unquote
 from Backend.config import Telegram
 from Backend import db, __version__
+import PTN
 
 # --- Configuration ---
 BASE_URL = Telegram.BASE_URL
-ADDON_NAME = "Telegram"
+ADDON_NAME = "TgStremio"
 ADDON_VERSION = __version__
-PAGE_SIZE = 15
+PAGE_SIZE = 30
 
 router = APIRouter(prefix="/stremio", tags=["Stremio Addon"])
 
 # Define available genres
 GENRES = [
-    "Action", "Adventure", "Animation", "Biography", "Comedy", 
-    "Crime", "Documentary", "Drama", "Family", "Fantasy", 
-    "History", "Horror", "Music", "Mystery", "Romance", 
+    "Action", "Adventure", "Animation", "Biography", "Comedy",
+    "Crime", "Documentary", "Drama", "Family", "Fantasy",
+    "History", "Horror", "Music", "Mystery", "Romance",
     "Sci-Fi", "Sport", "Thriller", "War", "Western"
 ]
 
@@ -25,7 +26,7 @@ def convert_to_stremio_meta(item: dict) -> dict:
     media_type = "series" if item.get("media_type") == "tv" else "movie"
     stremio_id = f"{item.get('tmdb_id')}-{item.get('db_index')}"
     
-    return {
+    meta = {
         "id": stremio_id,
         "type": media_type,
         "name": item.get("title"),
@@ -38,7 +39,60 @@ def convert_to_stremio_meta(item: dict) -> dict:
         "description": item.get("description") or "",
     }
 
-# --- Stremio Endpoints ---
+    cast_list = item.get("cast") or []
+    if cast_list:
+        meta["cast"] = cast_list[:5]
+    return meta
+
+
+def format_stream_details(filename: str, quality: str, size: str) -> tuple[str, str]:
+    try:
+        parsed = PTN.parse(filename)
+    except Exception:
+        return (f"Telegram {quality}", f"📁 {filename}\n💾 {size}")
+
+    codec_parts = []
+    if parsed.get("codec"):
+        codec_parts.append(f"🎥 {parsed.get('codec')}")
+    if parsed.get("bitDepth"):
+        codec_parts.append(f"🌈 {parsed.get('bitDepth')}bit")
+    if parsed.get("audio"):
+        codec_parts.append(f"🔊 {parsed.get('audio')}")
+    if parsed.get("encoder"):
+        codec_parts.append(f"👤 {parsed.get('encoder')}")
+
+    codec_info = " ".join(codec_parts) if codec_parts else ""
+
+    resolution = parsed.get("resolution", quality)
+    quality_type = parsed.get("quality", "")
+    stream_name = f"Telegram {resolution} {quality_type}".strip()
+
+    stream_title_parts = [
+        f"📁 {filename}",
+        f"💾 {size}",
+    ]
+    if codec_info:
+        stream_title_parts.append(codec_info)
+
+    stream_title = "\n".join(stream_title_parts)
+    return (stream_name, stream_title)
+
+
+def get_resolution_priority(stream_name: str) -> int:
+    resolution_map = {
+        "2160p": 2160, "4k": 2160, "uhd": 2160,
+        "1080p": 1080, "fhd": 1080,
+        "720p": 720, "hd": 720,
+        "480p": 480, "sd": 480,
+        "360p": 360,
+    }
+    for res_key, res_value in resolution_map.items():
+        if res_key in stream_name.lower():
+            return res_value
+    return 1
+
+
+# --- Routes ---
 @router.get("/manifest.json")
 async def get_manifest():
     return {
@@ -50,17 +104,12 @@ async def get_manifest():
         "types": ["movie", "series"],
         "resources": ["catalog", "meta", "stream"],
         "catalogs": [
-            # Movie Catalogs
             {
                 "type": "movie",
                 "id": "latest_movies",
                 "name": "Latest",
                 "extra": [
-                    {
-                        "name": "genre",
-                        "isRequired": False,
-                        "options": GENRES
-                    },
+                    {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
@@ -70,27 +119,18 @@ async def get_manifest():
                 "id": "top_movies",
                 "name": "Popular",
                 "extra": [
-                    {
-                        "name": "genre",
-                        "isRequired": False,
-                        "options": GENRES
-                    },
+                    {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
                 "extraSupported": ["genre", "skip", "search"]
             },
-            # Series Catalogs
             {
                 "type": "series",
                 "id": "latest_series",
                 "name": "Latest",
                 "extra": [
-                    {
-                        "name": "genre",
-                        "isRequired": False,
-                        "options": GENRES
-                    },
+                    {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"}
                 ],
                 "extraSupported": ["genre", "skip"]
@@ -100,11 +140,7 @@ async def get_manifest():
                 "id": "top_series",
                 "name": "Popular",
                 "extra": [
-                    {
-                        "name": "genre",
-                        "isRequired": False,
-                        "options": GENRES
-                    },
+                    {"name": "genre", "isRequired": False, "options": GENRES},
                     {"name": "skip"},
                     {"name": "search", "isRequired": False}
                 ],
@@ -116,18 +152,19 @@ async def get_manifest():
             "configurable": False,
             "configurationRequired": False
         }
-            }
-    
+    }
+
+
 @router.get("/catalog/{media_type}/{id}/{extra:path}.json")
 @router.get("/catalog/{media_type}/{id}.json")
 async def get_catalog(media_type: str, id: str, extra: Optional[str] = None):
     if media_type not in ["movie", "series"]:
         raise HTTPException(status_code=404, detail="Invalid catalog type")
-    
+
     genre_filter = None
     search_query = None
     stremio_skip = 0
-    
+
     if extra:
         params = extra.replace("&", "/").split("/")
         for param in params:
@@ -140,9 +177,9 @@ async def get_catalog(media_type: str, id: str, extra: Optional[str] = None):
                     stremio_skip = int(param.removeprefix("skip="))
                 except ValueError:
                     stremio_skip = 0
-    
+
     page = (stremio_skip // PAGE_SIZE) + 1
-    
+
     try:
         if search_query:
             search_results = await db.search_documents(query=search_query, page=page, page_size=PAGE_SIZE)
@@ -156,20 +193,19 @@ async def get_catalog(media_type: str, id: str, extra: Optional[str] = None):
                 sort_params = [("rating", "desc")]
             else:
                 sort_params = [("updated_on", "desc")]
-            
+
             if media_type == "movie":
                 data = await db.sort_movies(sort_params, page, PAGE_SIZE, genre_filter=genre_filter)
                 items = data.get("movies", [])
             else:
                 data = await db.sort_tv_shows(sort_params, page, PAGE_SIZE, genre_filter=genre_filter)
                 items = data.get("tv_shows", [])
-
     except Exception as e:
-        print(f"Error fetching catalog data: {e}")
         return {"metas": []}
-    
+
     metas = [convert_to_stremio_meta(item) for item in items]
     return {"metas": metas}
+
 
 @router.get("/meta/{media_type}/{id}.json")
 async def get_meta(media_type: str, id: str):
@@ -178,12 +214,11 @@ async def get_meta(media_type: str, id: str):
         tmdb_id, db_index = int(tmdb_id_str), int(db_index_str)
     except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail="Invalid Stremio ID format")
-    
+
     media = await db.get_media_details(tmdb_id=tmdb_id, db_index=db_index)
-    
     if not media:
         return {"meta": {}}
-    
+
     meta_obj = {
         "id": id,
         "type": "series" if media.get("media_type") == "tv" else "movie",
@@ -197,11 +232,10 @@ async def get_meta(media_type: str, id: str):
         "background": media.get("backdrop", ""),
         "imdb_id": media.get("imdb_id", "")
     }
-    
+
     if media_type == "series" and "seasons" in media:
         series_base_id = id
         videos = []
-        
         for season in sorted(media.get("seasons", []), key=lambda s: s.get("season_number")):
             for episode in sorted(season.get("episodes", []), key=lambda e: e.get("episode_number")):
                 episode_id = f"{series_base_id}:{season['season_number']}:{episode['episode_number']}"
@@ -210,13 +244,19 @@ async def get_meta(media_type: str, id: str):
                     "title": episode.get("title", f"Episode {episode['episode_number']}"),
                     "season": season.get("season_number"),
                     "episode": episode.get("episode_number"),
+                    "overview": episode.get("overview", ""),
+                    "released": episode.get("released", ""),
                     "thumbnail": episode.get("episode_backdrop") or "https://via.placeholder.com/1280x720/1a1a2e/eaeaea?text=No+Image",
                     "imdb_id": episode.get("imdb_id") or media.get("imdb_id"),
                 })
-        
         meta_obj["videos"] = videos
-    
+
+    cast_list = media.get("cast") or []
+    if cast_list:
+        meta_obj["cast"] = cast_list[:10]
+
     return {"meta": meta_obj}
+
 
 @router.get("/stream/{media_type}/{id}.json")
 async def get_streams(media_type: str, id: str):
@@ -228,25 +268,31 @@ async def get_streams(media_type: str, id: str):
         tmdb_id, db_index = map(int, base_id.split("-"))
     except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail="Invalid Stremio ID format")
-    
+
     media_details = await db.get_media_details(
         tmdb_id=tmdb_id,
         db_index=db_index,
         season_number=season_num,
         episode_number=episode_num
     )
-    
+
     if not media_details or "telegram" not in media_details:
         return {"streams": []}
-    
-    streams = [
-        {
-            "name": f"{quality.get('name', '')}",
-            "title": f"{quality.get('quality', 'HD')}\n💾 {quality.get('size', '')}",
-            "url": f"{BASE_URL}/dl/{quality.get('id')}/video.mkv"
-        }
-        for quality in media_details.get("telegram", [])
-        if quality.get("id")
-    ]
-    
+
+    streams = []
+    for quality in media_details.get("telegram", []):
+        if quality.get("id"):
+            filename = quality.get('name', '')
+            quality_str = quality.get('quality', 'HD')
+            size = quality.get('size', '')
+
+            stream_name, stream_title = format_stream_details(filename, quality_str, size)
+
+            streams.append({
+                "name": stream_name,
+                "title": stream_title,
+                "url": f"{BASE_URL}/dl/{quality.get('id')}/video.mkv"
+            })
+
+    streams.sort(key=lambda s: get_resolution_priority(s.get("name", "")), reverse=True)
     return {"streams": streams}
