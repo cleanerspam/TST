@@ -189,6 +189,7 @@ class Database:
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
                 logo=metadata_info['logo'],
+                cast=metadata_info['cast'],
                 media_type=metadata_info['media_type'],
                 telegram=[QualityDetail(
                     quality=metadata_info['quality'],
@@ -211,6 +212,7 @@ class Database:
                 poster=metadata_info['poster'],
                 backdrop=metadata_info['backdrop'],
                 logo=metadata_info['logo'],
+                cast=metadata_info['cast'],
                 media_type=metadata_info['media_type'],
                 seasons=[Season(
                     season_number=metadata_info['season_number'],
@@ -218,6 +220,8 @@ class Database:
                         episode_number=metadata_info['episode_number'],
                         title=metadata_info['episode_title'],
                         episode_backdrop=metadata_info['episode_backdrop'],
+                        overview=metadata_info['episode_overview'],
+                        released=metadata_info['episode_released'],
                         telegram=[QualityDetail(
                             quality=metadata_info['quality'],
                             id=metadata_info['encoded_string'],
