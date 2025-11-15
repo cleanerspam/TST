@@ -4,12 +4,14 @@ from urllib.parse import unquote
 from Backend.config import Telegram
 from Backend import db, __version__
 import PTN
+from datetime import datetime, timezone
+
 
 # --- Configuration ---
 BASE_URL = Telegram.BASE_URL
-ADDON_NAME = "TgStremio"
+ADDON_NAME = "Telegram"
 ADDON_VERSION = __version__
-PAGE_SIZE = 30
+PAGE_SIZE = 15
 
 router = APIRouter(prefix="/stremio", tags=["Stremio Addon"])
 
@@ -20,6 +22,7 @@ GENRES = [
     "History", "Horror", "Music", "Mystery", "Romance",
     "Sci-Fi", "Sport", "Thriller", "War", "Western"
 ]
+
 
 # --- Helper Functions ---
 def convert_to_stremio_meta(item: dict) -> dict:
@@ -233,24 +236,32 @@ async def get_meta(media_type: str, id: str):
         "imdb_id": media.get("imdb_id", "")
     }
 
+    # --- Add Episodes ---
     if media_type == "series" and "seasons" in media:
-        series_base_id = id
+
+        current_release = datetime.now(timezone.utc).isoformat()
         videos = []
+
         for season in sorted(media.get("seasons", []), key=lambda s: s.get("season_number")):
             for episode in sorted(season.get("episodes", []), key=lambda e: e.get("episode_number")):
-                episode_id = f"{series_base_id}:{season['season_number']}:{episode['episode_number']}"
+
+                episode_id = f"{id}:{season['season_number']}:{episode['episode_number']}"
+
                 videos.append({
                     "id": episode_id,
                     "title": episode.get("title", f"Episode {episode['episode_number']}"),
                     "season": season.get("season_number"),
                     "episode": episode.get("episode_number"),
-                    "overview": episode.get("overview", ""),
-                    "released": episode.get("released", ""),
-                    "thumbnail": episode.get("episode_backdrop") or "https://via.placeholder.com/1280x720/1a1a2e/eaeaea?text=No+Image",
+                    "overview": episode.get("overview") or "No description available for this episode yet.",
+                    "released": episode.get("released") or current_release,
+                    "thumbnail": episode.get("episode_backdrop") or 
+                        "https://via.placeholder.com/1280x720/1a1a2e/eaeaea?text=No+Image",
                     "imdb_id": episode.get("imdb_id") or media.get("imdb_id"),
                 })
+
         meta_obj["videos"] = videos
 
+    # --- Add cast ---
     cast_list = media.get("cast") or []
     if cast_list:
         meta_obj["cast"] = cast_list[:10]
