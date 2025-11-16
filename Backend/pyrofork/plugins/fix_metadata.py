@@ -1,30 +1,28 @@
 import asyncio
 import time
-import math
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from Backend import db
 from Backend.helper.custom_filter import CustomFilters
-from Backend.helper.metadata import fetch_tv_metadata, fetch_movie_metadata
+from Backend.helper.metadata import fetch_tv_metadata, fetch_movie_metadata, API_SEMAPHORE
 from Backend.logger import LOGGER
 
 # Global cancel flag
 CANCEL_REQUESTED = False
 
 # Tunable parameters (safe defaults for TMDb free-tier)
-MOVIE_BATCH = 500        # docs per page for movies
-TV_BATCH = 200           # docs per page for tv shows
-STATUS_UPDATE_INTERVAL = 50  # update Telegram status every N processed items
-CONCURRENCY_WORKERS = 5  # concurrent movie/show-level workers (safe default)
-EPISODE_SEQUENTIAL = True  # episodes processed sequentially per-show
-WORKER_MIN_DELAY = 0.0   # optional per-worker delay (seconds) to soften API load
+MOVIE_BATCH = 500
+TV_BATCH = 200
+STATUS_UPDATE_INTERVAL = 50
+CONCURRENCY_WORKERS = 4   # safe for TMDb free-tier
+WORKER_MIN_DELAY = 0.0    # optional small delay to soften load
 
-# Retry/backoff settings for TMDb fetches
-MAX_FETCH_RETRIES = 3
-BASE_BACKOFF_SECS = 0.5  # exponential backoff base
+# Retry/backoff settings
+MAX_FETCH_RETRIES = 4
+BASE_BACKOFF_SECS = 0.6   # slightly larger base for free-tier safety
 
 
 # -------------------------------
@@ -34,10 +32,11 @@ def progress_bar(done: int, total: int, length: int = 20) -> str:
     if total <= 0:
         return "[--------------------] 0/0"
     filled = int(length * (done / total))
+    filled = max(0, min(length, length))
     return f"[{'█' * filled}{'░' * (length - filled)}] {done}/{total}"
 
 
-def format_eta(seconds: float) -> str:
+def format_eta(seconds: Optional[float]) -> str:
     if seconds is None or seconds == float("inf"):
         return "unknown"
     minutes, sec = divmod(int(seconds), 60)
@@ -49,24 +48,38 @@ def format_eta(seconds: float) -> str:
     return f"{sec}s"
 
 
-async def fetch_with_retries(fetch_coro_func, *args, **kwargs):
+async def fetch_with_retries(fetch_coro_func, *args, **kwargs) -> Optional[Any]:
     """
-    Generic retry wrapper with exponential backoff for TMDb fetch coroutines.
-    `fetch_coro_func` should be an async function (callable) that performs the fetch.
-    Returns the result or None on permanent failure.
+    Generic retry wrapper with exponential backoff.
+    Detects simple rate-limit signals (429 or 'rate limit' text) and increases backoff.
+    Uses API_SEMAPHORE if provided by your project (optional global rate limiter).
     """
+    backoff = BASE_BACKOFF_SECS
     for attempt in range(1, MAX_FETCH_RETRIES + 1):
         try:
-            result = await fetch_coro_func(*args, **kwargs)
-            return result
+            if API_SEMAPHORE is not None:
+                # If your project provides an API_SEMAPHORE, use it to coordinate all API calls
+                async with API_SEMAPHORE:
+                    return await fetch_coro_func(*args, **kwargs)
+            else:
+                return await fetch_coro_func(*args, **kwargs)
         except Exception as e:
-            # If it's the last attempt, log and return None
+            err_text = str(e).lower()
+            # detect rate-limit hints
+            is_rate_limited = ("429" in err_text) or ("rate limit" in err_text) or ("too many requests" in err_text)
             if attempt == MAX_FETCH_RETRIES:
                 LOGGER.error(f"Fetch failed after {attempt} attempts: {e}")
                 return None
-            backoff = BASE_BACKOFF_SECS * (2 ** (attempt - 1))
-            LOGGER.warning(f"Fetch attempt {attempt} failed ({e}); backing off {backoff:.2f}s and retrying...")
-            await asyncio.sleep(backoff)
+            # escalate backoff on rate-limit
+            if is_rate_limited:
+                extra = backoff * 2
+                LOGGER.warning(f"Rate-limited on attempt {attempt}; backing off {extra:.2f}s (rate-limit). Error: {e}")
+                await asyncio.sleep(extra)
+                backoff *= 2
+            else:
+                LOGGER.warning(f"Fetch attempt {attempt} failed ({e}); backing off {backoff:.2f}s and retrying...")
+                await asyncio.sleep(backoff)
+                backoff *= 2
     return None
 
 
@@ -102,7 +115,7 @@ async def fix_metadata_handler(_, message):
     if force_mode:
         LOGGER.info("Starting /fixmetadata in FORCE mode (will refresh all items).")
 
-    # Step 1: compute totals (movies + show-level + episodes to update) using pagination
+    # Step 1: compute totals (movies + show-level + episodes to update)
     LOGGER.info("Counting items to process (initial scan).")
     total_movies = 0
     total_shows = 0
@@ -134,7 +147,7 @@ async def fix_metadata_handler(_, message):
             })
         total_shows += shows_count
 
-        # Episodes count: iterate TV docs (fetch seasons only)
+        # Episodes count
         skip = 0
         while True:
             docs = await database["tv"].find({}, {"seasons": 1}).skip(skip).limit(TV_BATCH).to_list(length=TV_BATCH)
@@ -167,7 +180,7 @@ async def fix_metadata_handler(_, message):
         nonlocal DONE
         elapsed = time.time() - start_time
         avg_time = elapsed / DONE if DONE else float("inf")
-        eta = avg_time * (TOTAL - DONE) if TOTAL > DONE else 0
+        eta = avg_time * (TOTAL - DONE) if TOTAL > DONE and avg_time != float("inf") else 0
         try:
             await status.edit_text(
                 f"🔧 Fixing metadata...\n"
@@ -182,6 +195,9 @@ async def fix_metadata_handler(_, message):
     # Semaphore bounds concurrency for movie & show-level workers
     semaphore = asyncio.Semaphore(CONCURRENCY_WORKERS)
 
+    # ---------------------------
+    # MOVIE UPDATE (added fields)
+    # ---------------------------
     async def process_movie_document(collection, movie_doc):
         nonlocal DONE
         if CANCEL_REQUESTED:
@@ -191,9 +207,7 @@ async def fix_metadata_handler(_, message):
         title = movie_doc.get("title")
         year = movie_doc.get("release_year")
 
-        # Acquire semaphore
         async with semaphore:
-            # fetch with retries
             meta = await fetch_with_retries(
                 fetch_movie_metadata,
                 title=title,
@@ -206,21 +220,28 @@ async def fix_metadata_handler(_, message):
                 await asyncio.sleep(WORKER_MIN_DELAY)
 
         if meta:
+            # Common movie fields + additional safe fields
+            update_payload = {
+                "imdb_id": meta.get("imdb_id"),
+                "cast": meta.get("cast"),
+                "description": meta.get("description"),
+                "genres": meta.get("genres"),
+                "poster": meta.get("poster"),
+                "backdrop": meta.get("backdrop"),
+                "logo": meta.get("logo"),                    # was missing previously
+                "rating": meta.get("rate"),
+                # Additional fields (safe: set if present, else None)
+                "runtime": meta.get("runtime"),
+                "tagline": meta.get("tagline"),
+                "homepage": meta.get("homepage"),
+                "production_companies": meta.get("production_companies"),
+                "spoken_languages": meta.get("spoken_languages"),
+                "keywords": meta.get("keywords"),
+                "certification": meta.get("certification") or meta.get("release_certification"),
+                "metadata_update_done": True
+            }
             try:
-                await collection.update_one(
-                    {"tmdb_id": tmdb_id},
-                    {"$set": {
-                        "imdb_id": meta.get("imdb_id"),
-                        "cast": meta.get("cast"),
-                        "description": meta.get("description"),
-                        "genres": meta.get("genres"),
-                        "poster": meta.get("poster"),
-                        "backdrop": meta.get("backdrop"),
-                        "logo": meta.get("logo"),
-                        "rating": meta.get("rate"),
-                        "metadata_update_done": True
-                    }}
-                )
+                await collection.update_one({"tmdb_id": tmdb_id}, {"$set": update_payload})
                 LOGGER.debug(f"Movie updated: {tmdb_id} - {title}")
             except Exception as e:
                 LOGGER.error(f"Failed to update movie {tmdb_id}: {e}")
@@ -231,11 +252,10 @@ async def fix_metadata_handler(_, message):
         if DONE % STATUS_UPDATE_INTERVAL == 0:
             await maybe_update_status()
 
+    # ---------------------------
+    # SHOW-LEVEL UPDATE (added fields)
+    # ---------------------------
     async def process_show_document(collection, tv_doc):
-        """
-        Fetch show-level metadata concurrently (bounded) and update fields (but NOT show-level 'done' flag).
-        Episode processing will set episode/season/show flags.
-        """
         nonlocal DONE
         if CANCEL_REQUESTED:
             return
@@ -259,21 +279,29 @@ async def fix_metadata_handler(_, message):
                 await asyncio.sleep(WORKER_MIN_DELAY)
 
         if meta:
+            update_payload = {
+                "imdb_id": meta.get("imdb_id"),
+                "cast": meta.get("cast"),
+                "description": meta.get("description"),
+                "genres": meta.get("genres"),
+                "poster": meta.get("poster"),
+                "backdrop": meta.get("backdrop"),
+                "logo": meta.get("logo"),                    # added logo
+                "rating": meta.get("rate"),
+                # Additional TV show fields
+                "number_of_seasons": meta.get("number_of_seasons"),
+                "number_of_episodes": meta.get("number_of_episodes"),
+                "episode_run_time": meta.get("episode_run_time"),
+                "networks": meta.get("networks"),
+                "production_companies": meta.get("production_companies"),
+                "homepage": meta.get("homepage"),
+                "status": meta.get("status"),
+                "tagline": meta.get("tagline"),
+                "keywords": meta.get("keywords"),
+                # Do NOT set "metadata_update_done" here — episodes logic will set it when fully done
+            }
             try:
-                await collection.update_one(
-                    {"tmdb_id": tmdb_id},
-                    {"$set": {
-                        "imdb_id": meta.get("imdb_id"),
-                        "cast": meta.get("cast"),
-                        "description": meta.get("description"),
-                        "genres": meta.get("genres"),
-                        "poster": meta.get("poster"),
-                        "backdrop": meta.get("backdrop"),
-                        "logo": meta.get("logo"),
-                        "rating": meta.get("rate"),
-                        # Do NOT set show-level metadata_update_done here.
-                    }}
-                )
+                await collection.update_one({"tmdb_id": tmdb_id}, {"$set": update_payload})
                 LOGGER.debug(f"Show-level metadata updated for TMDB {tmdb_id}")
             except Exception as e:
                 LOGGER.error(f"Failed to update show-level metadata for {tmdb_id}: {e}")
@@ -284,18 +312,10 @@ async def fix_metadata_handler(_, message):
         if DONE % STATUS_UPDATE_INTERVAL == 0:
             await maybe_update_status()
 
+    # ---------------------------
+    # EPISODE FAILSAFE (added episode fields)
+    # ---------------------------
     async def failsafe_process_episodes(collection, original_tv_doc, force=False):
-        """
-        FAIL-SAFE episode processor:
-        - Re-fetch freshest doc
-        - For each season -> episode:
-            - If episode.metadata_update_done is True (and not force) -> skip
-            - Fetch ep metadata with retries
-            - If metadata returned, perform atomic update with arrayFilters setting ep fields + metadata_update_done=True
-            - If any episode in a season fails, season.metadata_update_done remains False
-        - After processing all episodes, re-fetch doc, set per-season flags where applicable,
-          and set show-level metadata_update_done only if all episodes in all seasons are done.
-        """
         nonlocal DONE
         if CANCEL_REQUESTED:
             return
@@ -329,34 +349,42 @@ async def fix_metadata_handler(_, message):
                 if (not force) and ep.get("metadata_update_done", False):
                     continue
 
-                # Fetch metadata with retries
-                ep_meta = await fetch_with_retries(
-                    fetch_tv_metadata,
-                    title=title,
-                    season=s_num,
-                    episode=e_num,
-                    encoded_string=None,
-                    year=year,
-                    quality=None,
-                    default_id=None
-                )
+                async with semaphore:
+                    ep_meta = await fetch_with_retries(
+                        fetch_tv_metadata,
+                        title=title,
+                        season=s_num,
+                        episode=e_num,
+                        encoded_string=None,
+                        year=year,
+                        quality=None,
+                        default_id=None
+                    )
+                    if WORKER_MIN_DELAY:
+                        await asyncio.sleep(WORKER_MIN_DELAY)
 
                 if not ep_meta:
                     LOGGER.warning(f"[FAILSAFE] Episode metadata missing for {tmdb_id} S{s_num}E{e_num}; will retry later.")
                     season_ok = False
                     overall_show_ok = False
-                    # Don't update flags for this episode; leave metadata_update_done unset for retry
                 else:
-                    # Atomic update of episode fields + metadata_update_done = True
+                    # Compose episode update payload with expanded fields (safe-get)
+                    ep_payload = {
+                        "seasons.$[s].episodes.$[e].overview": ep_meta.get("episode_overview") or ep_meta.get("overview"),
+                        "seasons.$[s].episodes.$[e].released": ep_meta.get("episode_released") or ep_meta.get("air_date"),
+                        "seasons.$[s].episodes.$[e].episode_backdrop": ep_meta.get("episode_backdrop") or ep_meta.get("still_path"),
+                        "seasons.$[s].episodes.$[e].episode_title": ep_meta.get("episode_title") or ep_meta.get("name"),
+                        "seasons.$[s].episodes.$[e].still_path": ep_meta.get("still_path"),
+                        "seasons.$[s].episodes.$[e].runtime": ep_meta.get("runtime") or ep_meta.get("episode_run_time"),
+                        "seasons.$[s].episodes.$[e].vote_average": ep_meta.get("vote_average"),
+                        "seasons.$[s].episodes.$[e].crew": ep_meta.get("crew"),
+                        "seasons.$[s].episodes.$[e].guest_stars": ep_meta.get("guest_stars"),
+                        "seasons.$[s].episodes.$[e].metadata_update_done": True
+                    }
                     try:
                         await collection.update_one(
                             {"tmdb_id": tmdb_id},
-                            {"$set": {
-                                "seasons.$[s].episodes.$[e].overview": ep_meta.get("episode_overview"),
-                                "seasons.$[s].episodes.$[e].released": ep_meta.get("episode_released"),
-                                "seasons.$[s].episodes.$[e].episode_backdrop": ep_meta.get("episode_backdrop"),
-                                "seasons.$[s].episodes.$[e].metadata_update_done": True
-                            }},
+                            {"$set": ep_payload},
                             array_filters=[
                                 {"s.season_number": s_num},
                                 {"e.episode_number": e_num}
@@ -371,7 +399,7 @@ async def fix_metadata_handler(_, message):
                 if DONE % STATUS_UPDATE_INTERVAL == 0:
                     await maybe_update_status()
 
-            # After processing episodes of this season, set season-level flag if season_ok is True
+            # After processing episodes of this season, set season-level flag
             try:
                 await collection.update_one(
                     {"tmdb_id": tmdb_id},
@@ -410,7 +438,7 @@ async def fix_metadata_handler(_, message):
             LOGGER.info(f"[FAILSAFE] TV {tmdb_id} not fully updated; show-level flag left unset for retries.")
 
     # -------------------------
-    # Main loops: movies then tv
+    # MOVIE PROCESSOR
     # -------------------------
     async def process_movies():
         for db_index in range(1, storage_db_count + 1):
@@ -431,18 +459,15 @@ async def fix_metadata_handler(_, message):
                 if not docs:
                     break
 
-                tasks = []
-                for doc in docs:
-                    if CANCEL_REQUESTED:
-                        return
-                    tasks.append(asyncio.create_task(process_movie_document(collection, doc)))
-
+                tasks = [asyncio.create_task(process_movie_document(collection, doc)) for doc in docs]
                 if tasks:
-                    # gather; workers internally bounded by semaphore
                     await asyncio.gather(*tasks, return_exceptions=True)
 
                 skip += MOVIE_BATCH
 
+    # -------------------------
+    # TV PROCESSOR
+    # -------------------------
     async def process_tv():
         for db_index in range(1, storage_db_count + 1):
             if CANCEL_REQUESTED:
@@ -463,12 +488,7 @@ async def fix_metadata_handler(_, message):
                     break
 
                 # Run show-level fetches concurrently (bounded)
-                show_tasks = []
-                for tv_doc in tv_docs:
-                    if CANCEL_REQUESTED:
-                        return
-                    show_tasks.append(asyncio.create_task(process_show_document(collection, tv_doc)))
-
+                show_tasks = [asyncio.create_task(process_show_document(collection, tv_doc)) for tv_doc in tv_docs]
                 if show_tasks:
                     await asyncio.gather(*show_tasks, return_exceptions=True)
 
@@ -503,7 +523,8 @@ async def fix_metadata_handler(_, message):
         try:
             await status.edit_text(
                 f"❌ Metadata fixing cancelled.\n{progress_bar(DONE, TOTAL)}\n"
-                f"⏱ Time elapsed: {format_eta(time.time() - start_time)}"
+                f"⏱ Time elapsed: {format_eta(time.ti
+✔ Score:me() - start_time)}"
             )
         except Exception:
             pass
