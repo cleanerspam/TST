@@ -32,7 +32,8 @@ def progress_bar(done: int, total: int, length: int = 20) -> str:
     if total <= 0:
         return "[--------------------] 0/0"
     filled = int(length * (done / total))
-    filled = max(0, min(length, length))
+    # clamp filled to [0, length]
+    filled = max(0, min(length, filled))
     return f"[{'█' * filled}{'░' * (length - filled)}] {done}/{total}"
 
 
@@ -523,8 +524,7 @@ async def fix_metadata_handler(_, message):
         try:
             await status.edit_text(
                 f"❌ Metadata fixing cancelled.\n{progress_bar(DONE, TOTAL)}\n"
-                f"⏱ Time elapsed: {format_eta(time.ti
-✔ Score:me() - start_time)}"
+                f"⏱ Time elapsed: {format_eta(time.time() - start_time)}"
             )
         except Exception:
             pass
