@@ -16,7 +16,7 @@ CANCEL_REQUESTED = False
 # Tunable parameters (safe defaults for TMDb free-tier)
 MOVIE_BATCH = 500
 TV_BATCH = 200
-STATUS_UPDATE_INTERVAL = 50
+STATUS_UPDATE_INTERVAL = 200
 CONCURRENCY_WORKERS = 4   # safe for TMDb free-tier (also used for concurrent episode fetches)
 WORKER_MIN_DELAY = 0.0    # optional small delay to soften load
 
