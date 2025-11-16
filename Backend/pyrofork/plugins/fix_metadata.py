@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Optional, Any
+from typing import Optional, Any, List
 
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -17,7 +17,7 @@ CANCEL_REQUESTED = False
 MOVIE_BATCH = 500
 TV_BATCH = 200
 STATUS_UPDATE_INTERVAL = 50
-CONCURRENCY_WORKERS = 4   # safe for TMDb free-tier
+CONCURRENCY_WORKERS = 4   # safe for TMDb free-tier (also used for concurrent episode fetches)
 WORKER_MIN_DELAY = 0.0    # optional small delay to soften load
 
 # Retry/backoff settings
@@ -193,7 +193,8 @@ async def fix_metadata_handler(_, message):
             # ignore UI edit errors
             pass
 
-    # Semaphore bounds concurrency for movie & show-level workers
+    # Semaphore bounds concurrency for movie & show-level workers and episodes
+    # We will also use this semaphore inside concurrent episode fetches to limit parallel requests.
     semaphore = asyncio.Semaphore(CONCURRENCY_WORKERS)
 
     # ---------------------------
@@ -314,9 +315,16 @@ async def fix_metadata_handler(_, message):
             await maybe_update_status()
 
     # ---------------------------
-    # EPISODE FAILSAFE (added episode fields)
+    # EPISODE FAILSAFE (concurrent episode fields)
     # ---------------------------
     async def failsafe_process_episodes(collection, original_tv_doc, force=False):
+        """
+        This version fetches episodes concurrently (bounded by the global `semaphore`).
+        It:
+          - only creates tasks for episodes that need updating (unless force=True),
+          - uses array_filters to atomically update individual episodes (safe for concurrency),
+          - aggregates per-season and per-show success and sets flags accordingly.
+        """
         nonlocal DONE
         if CANCEL_REQUESTED:
             return
@@ -334,23 +342,17 @@ async def fix_metadata_handler(_, message):
         seasons = tv_latest.get("seasons") or []
         overall_show_ok = True
 
-        for season in seasons:
+        # Helper to process a single episode (runs under semaphore)
+        async def _process_single_episode(s_num: int, e_num: int) -> bool:
+            """
+            Returns True if episode was updated successfully, False otherwise.
+            """
+            nonlocal DONE
             if CANCEL_REQUESTED:
-                return
-            s_num = season.get("season_number")
-            episodes = season.get("episodes") or []
-            season_ok = True
+                return False
 
-            for ep in episodes:
-                if CANCEL_REQUESTED:
-                    return
-                e_num = ep.get("episode_number")
-
-                # If already updated and not force, skip
-                if (not force) and ep.get("metadata_update_done", False):
-                    continue
-
-                async with semaphore:
+            async with semaphore:
+                try:
                     ep_meta = await fetch_with_retries(
                         fetch_tv_metadata,
                         title=title,
@@ -363,42 +365,118 @@ async def fix_metadata_handler(_, message):
                     )
                     if WORKER_MIN_DELAY:
                         await asyncio.sleep(WORKER_MIN_DELAY)
+                except Exception as e:
+                    LOGGER.error(f"[FAILSAFE] Exception during fetch for {tmdb_id} S{s_num}E{e_num}: {e}")
+                    ep_meta = None
 
-                if not ep_meta:
-                    LOGGER.warning(f"[FAILSAFE] Episode metadata missing for {tmdb_id} S{s_num}E{e_num}; will retry later.")
-                    season_ok = False
-                    overall_show_ok = False
-                else:
-                    # Compose episode update payload with expanded fields (safe-get)
-                    ep_payload = {
-                        "seasons.$[s].episodes.$[e].overview": ep_meta.get("episode_overview") or ep_meta.get("overview"),
-                        "seasons.$[s].episodes.$[e].released": ep_meta.get("episode_released") or ep_meta.get("air_date"),
-                        "seasons.$[s].episodes.$[e].episode_backdrop": ep_meta.get("episode_backdrop") or ep_meta.get("still_path"),
-                        "seasons.$[s].episodes.$[e].episode_title": ep_meta.get("episode_title") or ep_meta.get("name"),
-                        "seasons.$[s].episodes.$[e].still_path": ep_meta.get("still_path"),
-                        "seasons.$[s].episodes.$[e].runtime": ep_meta.get("runtime") or ep_meta.get("episode_run_time"),
-                        "seasons.$[s].episodes.$[e].vote_average": ep_meta.get("vote_average"),
-                        "seasons.$[s].episodes.$[e].crew": ep_meta.get("crew"),
-                        "seasons.$[s].episodes.$[e].guest_stars": ep_meta.get("guest_stars"),
-                        "seasons.$[s].episodes.$[e].metadata_update_done": True
-                    }
-                    try:
-                        await collection.update_one(
-                            {"tmdb_id": tmdb_id},
-                            {"$set": ep_payload},
-                            array_filters=[
-                                {"s.season_number": s_num},
-                                {"e.episode_number": e_num}
-                            ]
-                        )
-                    except Exception as e:
-                        LOGGER.error(f"[FAILSAFE] Failed DB update for {tmdb_id} S{s_num}E{e_num}: {e}")
-                        season_ok = False
-                        overall_show_ok = False
-
+            if not ep_meta:
+                LOGGER.warning(f"[FAILSAFE] Episode metadata missing for {tmdb_id} S{s_num}E{e_num}; will retry later.")
+                # Count as attempted (so DONE increments), but return False so season/show not considered fully ok.
                 DONE += 1
                 if DONE % STATUS_UPDATE_INTERVAL == 0:
                     await maybe_update_status()
+                return False
+
+            # Prepare payload -- atomic update for the specific episode via array_filters
+            ep_payload = {
+                "seasons.$[s].episodes.$[e].overview": ep_meta.get("episode_overview") or ep_meta.get("overview"),
+                "seasons.$[s].episodes.$[e].released": ep_meta.get("episode_released") or ep_meta.get("air_date"),
+                "seasons.$[s].episodes.$[e].episode_backdrop": ep_meta.get("episode_backdrop") or ep_meta.get("still_path"),
+                "seasons.$[s].episodes.$[e].episode_title": ep_meta.get("episode_title") or ep_meta.get("name"),
+                "seasons.$[s].episodes.$[e].still_path": ep_meta.get("still_path"),
+                "seasons.$[s].episodes.$[e].runtime": ep_meta.get("runtime") or ep_meta.get("episode_run_time"),
+                "seasons.$[s].episodes.$[e].vote_average": ep_meta.get("vote_average"),
+                "seasons.$[s].episodes.$[e].crew": ep_meta.get("crew"),
+                "seasons.$[s].episodes.$[e].guest_stars": ep_meta.get("guest_stars"),
+                "seasons.$[s].episodes.$[e].metadata_update_done": True
+            }
+
+            try:
+                await collection.update_one(
+                    {"tmdb_id": tmdb_id},
+                    {"$set": ep_payload},
+                    array_filters=[
+                        {"s.season_number": s_num},
+                        {"e.episode_number": e_num}
+                    ]
+                )
+                LOGGER.debug(f"[FAILSAFE] Updated DB for {tmdb_id} S{s_num}E{e_num}")
+                DONE += 1
+                if DONE % STATUS_UPDATE_INTERVAL == 0:
+                    await maybe_update_status()
+                return True
+            except Exception as e:
+                LOGGER.error(f"[FAILSAFE] Failed DB update for {tmdb_id} S{s_num}E{e_num}: {e}")
+                # Count as attempted
+                DONE += 1
+                if DONE % STATUS_UPDATE_INTERVAL == 0:
+                    await maybe_update_status()
+                return False
+
+        # Iterate seasons; for each season create concurrent tasks for episodes in that season (bounded by semaphore)
+        for season in seasons:
+            if CANCEL_REQUESTED:
+                return
+            s_num = season.get("season_number")
+            episodes = season.get("episodes") or []
+
+            # Build tasks only for episodes that need updating (unless force=True)
+            tasks: List[asyncio.Task] = []
+            ep_number_to_task_index = {}  # helpful for mapping results to episodes
+            for ep in episodes:
+                if CANCEL_REQUESTED:
+                    return
+                e_num = ep.get("episode_number")
+                already_done = ep.get("metadata_update_done", False)
+                if (not force) and already_done:
+                    # skip this episode
+                    continue
+                # schedule the episode processing
+                task = asyncio.create_task(_process_single_episode(s_num, e_num))
+                ep_number_to_task_index[e_num] = len(tasks)
+                tasks.append(task)
+
+            # If there are no tasks for this season, set season flag accordingly and continue
+            if not tasks:
+                # If all episodes in season were already done, mark season ok True
+                try:
+                    # set season-level metadata_update_done to True (if not set)
+                    await collection.update_one(
+                        {"tmdb_id": tmdb_id},
+                        {"$set": {"seasons.$[s].metadata_update_done": True}},
+                        array_filters=[{"s.season_number": s_num}]
+                    )
+                except Exception as e:
+                    LOGGER.error(f"[FAILSAFE] Failed to set season flag for {tmdb_id} season {s_num}: {e}")
+                    overall_show_ok = False
+                continue
+
+            # Run the tasks and gather results.
+            # We limit concurrency through the semaphore used inside _process_single_episode.
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                LOGGER.error(f"[FAILSAFE] Exception while gathering episode tasks for {tmdb_id} season {s_num}: {e}")
+                # If gather itself fails, consider season not fully ok.
+                overall_show_ok = False
+                # ensure pending tasks are cancelled
+                for t in tasks:
+                    if not t.done():
+                        t.cancel()
+                # continue to next season
+                continue
+
+            # Analyze results: results list contains True/False or exceptions
+            season_ok = True
+            for idx, res in enumerate(results):
+                if isinstance(res, Exception):
+                    LOGGER.error(f"[FAILSAFE] Task exception for {tmdb_id} season {s_num} - task idx {idx}: {res}")
+                    season_ok = False
+                    overall_show_ok = False
+                elif res is not True:
+                    # False or None means episode update failed
+                    season_ok = False
+                    overall_show_ok = False
 
             # After processing episodes of this season, set season-level flag
             try:
@@ -493,7 +571,7 @@ async def fix_metadata_handler(_, message):
                 if show_tasks:
                     await asyncio.gather(*show_tasks, return_exceptions=True)
 
-                # Process episodes sequentially per-show (failsafe)
+                # Process episodes per-show using the concurrent failsafe (episodes inside a show are concurrent up to semaphore)
                 for tv_doc in tv_docs:
                     if CANCEL_REQUESTED:
                         return
