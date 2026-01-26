@@ -1,0 +1,913 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Updates - Telegram Stremio{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-32">
+    <style>
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 4px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.8);
+        }
+    </style>
+    <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold text-primary">Pending Updates</h1>
+        <button onclick="window.location.reload()"
+            class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
+            <i class="fas fa-sync-alt"></i> <span>Refresh</span>
+        </button>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading" class="hidden text-center py-12">
+        <i class="fas fa-spinner fa-spin text-4xl text-primary"></i>
+        <p class="mt-4 theme-text-secondary">Loading pending updates...</p>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-12 theme-card rounded-lg">
+        <i class="fas fa-check-circle text-4xl text-green-500 mb-4"></i>
+        <h3 class="text-xl font-bold theme-text">All Caught Up!</h3>
+        <p class="theme-text-secondary">No pending updates found.</p>
+    </div>
+
+    <!-- Grid -->
+    <div id="updates-grid" class="grid grid-cols-1 gap-6 mb-8">
+        <!-- Cards injected here -->
+    </div>
+
+    <!-- Load More Button -->
+    <div class="text-center mt-8">
+        <button id="load-more-btn" onclick="loadMore()"
+            class="hidden theme-card hover:bg-opacity-80 px-6 py-3 rounded-full transition-colors font-medium">
+            Load More
+        </button>
+        <p id="load-count" class="text-sm theme-text-secondary mt-3"></p>
+    </div>
+
+    <!-- Quick Check Floating Stats (Optional, maybe just count) -->
+</div>
+
+<!-- Bottom Sticky Bar -->
+<div class="fixed bottom-0 left-0 right-0 bg-gray-900/95 backdrop-blur border-t border-gray-800 p-4 z-40 transform transition-transform duration-300 translate-y-full"
+    id="bulk-bar">
+    <div class="max-w-7xl mx-auto flex justify-between items-center px-4">
+        <div class="text-white font-medium">
+            <span id="selection-count" class="text-primary font-bold text-lg">0</span> items selected
+        </div>
+        <button onclick="submitAll()" id="submit-btn"
+            class="bg-primary hover:bg-primary-dark text-white px-8 py-3 rounded-lg shadow-lg font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+            Submit Selection
+        </button>
+    </div>
+</div>
+
+<!-- Progress Modal -->
+<div id="progress-modal" class="fixed inset-0 bg-black bg-opacity-90 hidden flex items-center justify-center z-50">
+    <div class="theme-card p-8 rounded-lg w-full max-w-lg shadow-2xl border border-gray-700 text-center">
+        <h2 class="text-2xl font-bold mb-4 theme-text">Processing Updates</h2>
+
+        <div class="mb-6">
+            <div class="flex justify-between text-sm theme-text-secondary mb-2">
+                <span id="progress-text">Processing 0 of 0</span>
+                <span id="progress-percentage">0%</span>
+            </div>
+            <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
+                <div id="progress-bar" class="bg-primary h-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <p id="progress-detail" class="text-sm theme-text-secondary animate-pulse">Starting operation...</p>
+
+        <div id="progress-done-btn" class="hidden mt-6">
+            <button onclick="window.location.reload()"
+                class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded shadow transition-colors">
+                Done - Reload Page
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Re-identify Modal (Wizard) -->
+<div id="reidentify-modal"
+    class="fixed inset-0 bg-black bg-opacity-80 hidden flex items-center justify-center z-50 transition-opacity backdrop-blur-sm">
+    <div
+        class="theme-card rounded-xl w-full max-w-2xl shadow-2xl border border-gray-700 flex flex-col max-h-[90vh] overflow-hidden transform transition-all scale-100">
+
+        <!-- Header -->
+        <div
+            class="bg-gradient-to-r from-primary to-secondary p-4 border-b border-white/10 flex justify-between items-center">
+            <h2 class="text-xl font-bold text-white">Fix Match</h2>
+            <button onclick="closeModal()" class="text-white/70 hover:text-white transition-colors">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+
+        <!-- Wizard Content -->
+        <div class="p-6 overflow-y-auto flex-1 relative">
+
+            <!-- Loading Overlay -->
+            <div id="wizard-loading"
+                class="absolute inset-0 bg-gray-900/80 z-10 hidden flex flex-col items-center justify-center">
+                <i class="fas fa-spinner fa-spin text-4xl text-primary mb-3"></i>
+                <p id="wizard-loading-text" class="text-white font-medium">Processing...</p>
+            </div>
+
+            <!-- STEP 1: Type Selection -->
+            <div id="step-1" class="wizard-step">
+                <h3 class="text-lg font-medium theme-text mb-6 text-center">What type of media is this?</h3>
+                <div class="grid grid-cols-2 gap-6">
+                    <button onclick="setWizardType('movie')"
+                        class="group p-6 rounded-lg border-2 border-white/10 hover:border-primary hover:bg-black/20 transition-all flex flex-col items-center">
+                        <i
+                            class="fas fa-film text-4xl theme-text-secondary group-hover:text-primary mb-4 transition-colors"></i>
+                        <span class="text-lg font-bold theme-text group-hover:text-primary">Movie</span>
+                    </button>
+                    <button onclick="setWizardType('tv')"
+                        class="group p-6 rounded-lg border-2 border-white/10 hover:border-primary hover:bg-black/20 transition-all flex flex-col items-center">
+                        <i
+                            class="fas fa-tv text-4xl theme-text-secondary group-hover:text-primary mb-4 transition-colors"></i>
+                        <span class="text-lg font-bold theme-text group-hover:text-primary">TV Show</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 2: Details Input -->
+            <div id="step-2" class="wizard-step hidden">
+                <h3 class="text-lg font-medium theme-text mb-4 px-1" id="step-2-title">Enter Details</h3>
+
+                <div class="space-y-4">
+                    <!-- Name Input -->
+                    <div>
+                        <label class="block text-xs font-bold theme-text-secondary uppercase mb-1">Name</label>
+                        <input type="text" id="wiz-name"
+                            class="w-full bg-black/20 border border-white/10 rounded p-3 theme-text focus:outline-none focus:border-primary transition-colors"
+                            placeholder="e.g. Breaking Bad">
+                    </div>
+
+                    <!-- TV Specific -->
+                    <div id="wiz-tv-inputs" class="grid grid-cols-2 gap-4 hidden">
+                        <div>
+                            <label class="block text-xs font-bold theme-text-secondary uppercase mb-1">Season</label>
+                            <input type="number" id="wiz-season"
+                                class="w-full bg-black/20 border border-white/10 rounded p-3 theme-text focus:outline-none focus:border-primary transition-colors"
+                                placeholder="1">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold theme-text-secondary uppercase mb-1">Episode</label>
+                            <input type="number" id="wiz-episode"
+                                class="w-full bg-black/20 border border-white/10 rounded p-3 theme-text focus:outline-none focus:border-primary transition-colors"
+                                placeholder="1">
+                        </div>
+                    </div>
+
+                    <!-- Movie Specific (Year) -->
+                    <div id="wiz-movie-inputs" class="hidden">
+                        <label class="block text-xs font-bold theme-text-secondary uppercase mb-1">Year
+                            (Optional)</label>
+                        <input type="number" id="wiz-year"
+                            class="w-full bg-black/20 border border-white/10 rounded p-3 theme-text focus:outline-none focus:border-primary transition-colors"
+                            placeholder="e.g. 2024">
+                    </div>
+                </div>
+
+                <div class="flex justify-between mt-8">
+                    <button onclick="goToStep(1)"
+                        class="px-4 py-2 theme-text-secondary hover:text-primary">Back</button>
+                    <button onclick="runWizardSearch()"
+                        class="bg-primary hover:bg-primary-dark text-white px-6 py-2 rounded shadow-lg font-bold transition-transform active:scale-95">
+                        Search Matches
+                    </button>
+                </div>
+            </div>
+
+            <!-- STEP 3: Results -->
+            <div id="step-3" class="wizard-step hidden flex flex-col h-full">
+                <h3 class="text-lg font-medium theme-text mb-4 px-1">Select Correct Match</h3>
+
+                <div id="wiz-results-grid" class="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar min-h-[300px]">
+                    <!-- Injected via JS -->
+                </div>
+
+                <div class="flex justify-between mt-6 pt-4 border-t border-white/10">
+                    <button onclick="goToStep(2)" class="px-4 py-2 theme-text-secondary hover:text-primary">Back to
+                        Search</button>
+                    <button onclick="closeModal()"
+                        class="px-4 py-2 theme-text-secondary hover:text-primary">Cancel</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentPage = 1;
+    let isLoading = false;
+    let hasMore = true;
+    let selections = {};
+    let groupSelections = {};
+
+    document.addEventListener('DOMContentLoaded', () => loadUpdates());
+
+    function showToast(message, type = 'success') {
+        // Create toast element on the fly if it doesn't exist for simplicity, 
+        // or assume the static one exists (it was removed in previous edit? Let's check. 
+        // The toast DIV was removed in the previous edit too! I need to re-add it or use a simple alert/console for now if I can't add HTML.
+        // Actually, I can replace the script tag start to include the toast div if needed.
+        // But for now, let's just log or use a simple implementation if the element is missing.
+        // Wait, the Toast DIV was removed in the previous edit. I should re-add it in the HTML part if possible, 
+        // but since I'm editing the SCRIPT part here, I'll check if I can inject it via JS or if I should do another edit.
+        // FOR NOW: I will assume the toast div is gone and just recreate it in JS if needed, or just alert.
+        // Better: I will use the existing toast logic but note that the HTML element might be missing.
+        // Actually, looking at the previous file content (Step 94), the Toast DIV is NOT there.
+        // I will re-add the Toast Div in the HTML using a separate edit if needed, or just inject it here.
+
+        let toast = document.getElementById('toast');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = "fixed bottom-24 right-4 bg-gray-800 text-white px-4 py-3 rounded-lg shadow-lg transform translate-y-40 transition-transform duration-300 flex items-center space-x-3 z-50";
+            toast.innerHTML = '<div id="toast-icon"></div><div id="toast-message"></div>';
+            document.body.appendChild(toast);
+        }
+
+        const msg = toast.querySelector('#toast-message') || document.getElementById('toast-message');
+        const icon = toast.querySelector('#toast-icon') || document.getElementById('toast-icon');
+
+        if (msg) msg.textContent = message;
+        if (icon) {
+            if (type === 'success') {
+                icon.innerHTML = '<i class="fas fa-check-circle text-green-500"></i>';
+            } else {
+                icon.innerHTML = '<i class="fas fa-times-circle text-red-500"></i>';
+            }
+        }
+
+        toast.classList.remove('translate-y-40');
+        setTimeout(() => {
+            toast.classList.add('translate-y-40');
+        }, 3000);
+    }
+
+    async function loadUpdates() {
+        if (isLoading || !hasMore) return;
+
+        isLoading = true;
+
+        if (currentPage === 1) {
+            document.getElementById('loading').classList.remove('hidden');
+        } else {
+            document.getElementById('load-more-btn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        }
+
+        try {
+            const response = await fetch(`/api/admin/updates/pending?page=${currentPage}&page_size=20`);
+            const data = await response.json();
+
+            if (data.results.length < 20) {
+                hasMore = false;
+                document.getElementById('load-more-btn').classList.add('hidden');
+            } else {
+                document.getElementById('load-more-btn').classList.remove('hidden');
+            }
+
+            renderUpdates(data.results);
+
+            const currentCount = document.getElementById('updates-grid').children.length;
+            const totalCount = data.total;
+            const countEl = document.getElementById('load-count');
+            if (countEl) countEl.textContent = `${currentCount} out of ${totalCount} loaded`;
+
+            currentPage++;
+
+        } catch (error) {
+            console.error('Error fetching updates:', error);
+            showToast('Failed to load updates', 'error');
+        } finally {
+            isLoading = false;
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('load-more-btn').innerHTML = 'Load More';
+
+            if (currentPage === 2 && document.getElementById('updates-grid').children.length === 0) {
+                document.getElementById('empty-state').classList.remove('hidden');
+            }
+        }
+    }
+
+    function loadMore() {
+        loadUpdates();
+    }
+
+    function renderUpdates(items) {
+        const grid = document.getElementById('updates-grid');
+
+        items.forEach(item => {
+            const oldFile = item.old_file;
+            const meta = item.metadata;
+            const cardId = item._id;
+
+            let title = meta.title;
+            if (item.media_type === 'tv') {
+                title += ` S${pad(item.season)}E${pad(item.episode)}`;
+            }
+
+            const card = document.createElement('div');
+            card.className = "theme-card rounded-lg overflow-hidden shadow-lg border border-gray-700/50 mb-3";
+            card.id = `card-${cardId}`;
+
+            // DECIDE LAYOUT BASED ON CANDIDATE COUNT
+            let rightColumnHtml = '';
+
+            if (item.candidates.length === 1) {
+                // --- SINGLE CANDIDATE LAYOUT ---
+                const cand = item.candidates[0];
+                const newFile = cand.new_file;
+                const cid = cand._id;
+
+                rightColumnHtml = `
+                    <div class="flex flex-col h-full">
+                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Proposed File</h4>
+                        <div class="bg-green-50 p-4 rounded border border-green-200 relative group flex-1 flex flex-col">
+                            <div class="flex justify-end mb-2">
+                                <span class="text-green-600 text-xs font-bold uppercase tracking-wider">New</span>
+                            </div>
+                            
+                            <div class="space-y-4 flex-1">
+                                <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
+                                    ${newFile.file_name || newFile.name || 'Unknown'}
+                                </div>
+                                <div class="flex flex-col text-xs text-gray-600 space-y-1">
+                                    <div class="flex justify-between items-center">
+                                        <span>Size: <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span></span>
+                                        ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
+                                        <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
+                                    </div>
+                                    <div class="text-[10px] italic text-gray-400 mt-1">Added: ${new Date(cand.created_at).toLocaleDateString()}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')" 
+                            id="btn-accept-${cid}"
+                            data-group-id="${cardId}"
+                            class="mt-3 w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
+                            <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
+                            <span class="font-bold">Accept New File</span>
+                        </button>
+                        <p class="text-xs text-center text-gray-400 mt-2">Replaces current file</p>
+                    </div>
+                `;
+            } else {
+                // --- MULTIPLE CANDIDATES LAYOUT ---
+                let candidatesHtml = '';
+                item.candidates.forEach(cand => {
+                    const newFile = cand.new_file;
+                    const cid = cand._id;
+
+                    candidatesHtml += `
+                        <div class="bg-white/5 p-3 rounded border border-gray-700 mb-3 last:mb-0 relative">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="text-xs break-all text-gray-900 font-mono bg-white border border-gray-200 p-2 rounded leading-relaxed shadow-sm w-full mr-2">
+                                    ${newFile.file_name || newFile.name || 'Unknown'}
+                                </div>
+                                <div class="flex-shrink-0">
+                                    <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')" 
+                                        id="btn-accept-${cid}"
+                                        data-group-id="${cardId}"
+                                        class="flex items-center space-x-1 px-3 py-2 rounded bg-gray-100 hover:bg-green-100 text-green-700 border border-green-200 transition-colors">
+                                        <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
+                                        <span class="font-bold text-xs">Accept</span>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="flex items-center text-xs text-gray-400 gap-3">
+                                 <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span>
+                                 ${newFile.dc_id ? `<span class="bg-gray-200 px-1 rounded text-gray-700 border border-gray-300" title="Data Center ID">DC: ${newFile.dc_id}</span>` : ''}
+                                 <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
+                                 <span class="text-[10px] italic text-gray-500">Added: ${new Date(cand.created_at).toLocaleDateString()}</span>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                rightColumnHtml = `
+                    <div class="flex flex-col bg-transparent h-full min-h-0">
+                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Candidates (${item.candidates.length})</h4>
+                        <div class="flex flex-col space-y-3 flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar">
+                            ${candidatesHtml}
+                        </div>
+                    </div>
+                `;
+            }
+
+
+            card.innerHTML = `
+            <div class="flex flex-col xl:flex-row">
+                <!-- Poster Section -->
+                <div class="xl:w-48 bg-gray-900 flex-shrink-0 relative">
+                    <img src="${meta.poster || '/static/placeholder.jpg'}" alt="Poster" class="w-full h-64 xl:h-full object-cover opacity-80">
+                    <div class="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex flex-col justify-end p-4">
+                        <span class="text-xs font-bold bg-primary px-2 py-1 rounded w-fit mb-2 uppercase">${item.media_type}</span>
+                        <h3 class="font-bold text-white leading-tight">${title}</h3>
+                        <p class="text-sm text-gray-300">${meta.year || ''}</p>
+                    </div>
+                </div>
+                
+                <!-- Comparison Section -->
+                <div class="flex-1 p-6">
+                    <div class="flex justify-between items-start mb-6">
+                         <div>
+                            <h2 class="text-xl font-bold theme-text mb-1">${title}</h2>
+                            <p class="text-sm theme-text-secondary">Quality Conflict: <span class="text-accent font-bold">${item.quality}</span></p>
+                         </div>
+                         <div class="flex space-x-2">
+                            <button onclick="deleteAll('${item.candidates[0]._id}')" class="text-xs bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded transition-colors shadow-sm font-bold" title="Delete current and all candidates">
+                                <i class="fas fa-trash-alt mr-1"></i> Delete All
+                            </button>
+                            <button onclick="openReidentify('${item.candidates[0]._id}')" class="text-xs bg-gray-700 hover:bg-gray-600 text-white px-3 py-1 rounded transition-colors" title="Fix Match for first candidate">
+                                <i class="fas fa-edit mr-1"></i> Fix Match
+                            </button>
+                         </div>
+                    </div>
+
+                    <!-- Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:h-[350px]">
+                        <!-- Left Column: Current File -->
+                        <div class="flex flex-col bg-transparent h-full min-h-0">
+                            <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Current File</h4>
+                            <div class="bg-gray-100 p-4 rounded border border-red-200 relative group overflow-hidden flex-1 flex flex-col">
+                                <div class="flex justify-end mb-2">
+                                     <span class="text-red-600 text-xs font-bold uppercase tracking-wider">Current</span>
+                                </div>
+                                
+                                ${oldFile ? (() => {
+                    const fName = oldFile.file_name || oldFile.name || 'Unknown';
+                    let fType = oldFile.file_type || 'Unknown';
+                    if (fType.toLowerCase() === 'unknown') {
+                        const ext = fName.split('.').pop().toLowerCase();
+                        if (['mkv', 'mp4', 'avi', 'mov', 'webm'].includes(ext)) fType = 'video';
+                    }
+
+                    return `
+                                    <div class="space-y-4 flex-1">
+                                        <div class="text-xs break-all text-gray-900 font-mono bg-white border border-gray-200 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">${fName}</div>
+                                        <div class="flex flex-col text-xs text-gray-600 space-y-1">
+                                            <div class="flex justify-between items-center">
+                                                <span>Size: <span class="text-gray-900 font-bold">${oldFile.file_size || oldFile.size || 'N/A'}</span></span>
+                                                ${oldFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300" title="Data Center ID">DC: <span class="text-gray-900 font-bold">${oldFile.dc_id}</span></span>` : ''}
+                                                <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${fType}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    `;
+                })() : `
+                                    <div class="text-yellow-600 text-sm flex items-center h-20 items-center justify-center flex-1">
+                                        <div class="text-center">
+                                            <i class="fas fa-exclamation-triangle mb-1"></i><br>
+                                            File deleted or unavailable
+                                        </div>
+                                    </div>
+                                `}
+                            </div>
+                            
+                            <div class="mt-3">
+                                <button onclick="toggleSelection('${item.candidates[0]._id}', 'keep_old', '${cardId}')" 
+                                    id="btn-reject-${item.candidates[0]._id}"
+                                    data-group-id="${cardId}"
+                                    class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-red-200 opacity-80 hover:opacity-100 hover:bg-red-50 bg-white shadow-sm text-red-700">
+                                    <i class="far fa-circle text-lg" id="icon-reject-${item.candidates[0]._id}"></i>
+                                    <span class="font-bold">Keep Current File</span>
+                                </button>
+                                <p class="text-xs text-center text-gray-400 mt-2">Rejects all new candidates</p>
+                            </div>
+                        </div>
+
+                        <!-- Right Column -->
+                        ${rightColumnHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+            grid.appendChild(card);
+        });
+    }
+
+    function toggleSelection(id, action, groupId = null) {
+        if (!groupId) {
+            const btn = document.getElementById(`btn-accept-${id}`) || document.getElementById(`btn-reject-${id}`);
+            if (btn) groupId = btn.dataset.groupId;
+        }
+
+        if (selections[id] === action) {
+            delete selections[id];
+            if (groupId) delete groupSelections[groupId];
+            updateCardUI(id, groupId, false);
+        } else {
+            if (groupId && groupSelections[groupId]) {
+                const oldId = groupSelections[groupId];
+                delete selections[oldId];
+                updateCardUI(oldId, groupId, false);
+            }
+            selections[id] = action;
+            if (groupId) groupSelections[groupId] = id;
+            updateCardUI(id, groupId, true);
+        }
+
+        updateBulkBar();
+    }
+
+    function updateCardUI(id, groupId, isSelected) {
+        const selectedAction = selections[id];
+        const btnAccept = document.getElementById(`btn-accept-${id}`);
+        const iconAccept = document.getElementById(`icon-accept-${id}`);
+
+        if (btnAccept && iconAccept) {
+            const isSingleView = btnAccept.classList.contains('w-full');
+            if (isSelected && selectedAction === 'keep_new') {
+                btnAccept.classList.remove('bg-gray-100', 'hover:bg-green-100', 'text-green-700', 'border-green-200', 'bg-white', 'opacity-80');
+                btnAccept.classList.add('bg-green-600', 'text-white', 'border-green-600', 'hover:bg-green-700', 'opacity-100');
+                iconAccept.classList.replace('fa-circle', 'fa-check-circle');
+                iconAccept.classList.remove('far');
+                iconAccept.classList.add('fas');
+            } else {
+                btnAccept.classList.remove('bg-green-600', 'text-white', 'border-green-600', 'hover:bg-green-700', 'opacity-100');
+                if (isSingleView) {
+                    btnAccept.classList.add('bg-white', 'text-green-700', 'border-green-200', 'opacity-80', 'hover:opacity-100');
+                } else {
+                    btnAccept.classList.add('bg-gray-100', 'hover:bg-green-100', 'text-green-700', 'border-green-200');
+                }
+                iconAccept.classList.replace('fa-check-circle', 'fa-circle');
+                iconAccept.classList.add('far');
+                iconAccept.classList.remove('fas');
+            }
+        }
+
+        const btnReject = document.getElementById(`btn-reject-${id}`);
+        const iconReject = document.getElementById(`icon-reject-${id}`);
+
+        if (btnReject && iconReject) {
+            if (isSelected && selectedAction === 'keep_old') {
+                btnReject.classList.remove('opacity-80', 'hover:opacity-100', 'bg-white', 'shadow-sm', 'text-red-700');
+                btnReject.classList.add('bg-red-600', 'text-white', 'border-red-600', 'hover:bg-red-700', 'opacity-100', 'shadow-md');
+                iconReject.classList.replace('fa-circle', 'fa-check-circle');
+                iconReject.classList.remove('far');
+                iconReject.classList.add('fas');
+            } else {
+                btnReject.classList.add('opacity-80', 'hover:opacity-100', 'bg-white', 'shadow-sm', 'text-red-700');
+                btnReject.classList.remove('bg-red-600', 'text-white', 'border-red-600', 'hover:bg-red-700', 'opacity-100', 'shadow-md');
+                iconReject.classList.replace('fa-check-circle', 'fa-circle');
+                iconReject.classList.add('far');
+                iconReject.classList.remove('fas');
+            }
+        }
+
+        const card = document.getElementById(`card-${groupId}`);
+        if (card) {
+            if (groupSelections[groupId]) {
+                const selectedAction = selections[groupSelections[groupId]];
+                card.classList.remove('ring-2', 'ring-green-500', 'ring-red-500');
+
+                if (selectedAction === 'keep_new') {
+                    card.classList.add('ring-2', 'ring-green-500');
+                } else {
+                    card.classList.add('ring-2', 'ring-red-500');
+                }
+            } else {
+                card.classList.remove('ring-2', 'ring-green-500', 'ring-red-500');
+            }
+        }
+    }
+
+    function updateBulkBar() {
+        const count = Object.keys(selections).length;
+        document.getElementById('selection-count').textContent = count;
+        const bar = document.getElementById('bulk-bar');
+        const btn = document.getElementById('submit-btn');
+
+        if (count > 0) {
+            bar.classList.remove('translate-y-full');
+            btn.disabled = false;
+        } else {
+            bar.classList.add('translate-y-full');
+            btn.disabled = true;
+        }
+    }
+
+    async function submitAll() {
+        const payload = {
+            selections: Object.entries(selections).map(([id, action]) => ({
+                pending_id: id,
+                action: action
+            }))
+        };
+
+        if (payload.selections.length === 0) return;
+
+        const modal = document.getElementById('progress-modal');
+        modal.classList.remove('hidden');
+        document.getElementById('progress-bar').style.width = '0%';
+        document.getElementById('progress-text').textContent = 'Starting processing...';
+        document.getElementById('progress-percentage').textContent = '0%';
+        document.getElementById('progress-detail').textContent = 'Initiating bulk update...';
+        document.getElementById('progress-done-btn').classList.add('hidden');
+
+        try {
+            const response = await fetch('/api/admin/updates/bulk_resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) throw new Error('Bulk API failed');
+
+            const data = await response.json();
+            pollStatus(data.task_id);
+
+        } catch (e) {
+            alert('Failed to submit: ' + e.message);
+            modal.classList.add('hidden');
+        }
+    }
+
+    async function deleteAll(pendingId) {
+        if (!confirm("Are you sure? This will delete the current file from the database/channel AND all candidate files.")) return;
+
+        // Show loading state on button if possible, or just a toast
+        showToast("Deleting files...", "info");
+
+        try {
+            const response = await fetch('/api/admin/updates/delete_all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pending_id: pendingId })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast(data.message || 'Deleted successfully');
+                // Remove the card from UI
+                // We need to find the card ID via the pending ID... or refresh.
+                // Since we don't have the card ID passed directly to this func without extra work, 
+                // and the pending ID might be just one of many, reloading or hiding might be tricky.
+                // But we know 'item.candidates[0]._id' was used.
+                // The 'item._id' was used for the card ID. 
+                // Wait, simpler: reload the list or find the card that contains this pending ID.
+                // Ideally, we just reloadUpdates or refresh the page.
+                setTimeout(() => loadUpdates(), 1000); // Reload to reflect changes
+                // Or remove card if we can identify it.
+                // Let's just reload for safety to ensure state is clean.
+                window.location.reload();
+            } else {
+                showToast(data.detail || 'Failed to delete', 'error');
+            }
+        } catch (e) {
+            console.error(e);
+            showToast('Network error', 'error');
+        }
+    }
+
+    async function pollStatus(taskId) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const progressPercent = document.getElementById('progress-percentage');
+        const progressDetail = document.getElementById('progress-detail');
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/admin/updates/task/${taskId}`);
+                if (!res.ok) {
+                    clearInterval(pollInterval);
+                    throw new Error("Failed to get status");
+                }
+
+                const status = await res.json();
+                const total = status.total || 1;
+                const processed = status.processed || 0;
+                const percent = Math.round((processed / total) * 100);
+
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `Processing ${processed} of ${total}`;
+                progressPercent.textContent = `${percent}%`;
+                if (status.details) progressDetail.textContent = status.details;
+
+                if (status.status === 'completed' || status.status === 'failed') {
+                    clearInterval(pollInterval);
+                    document.getElementById('progress-done-btn').classList.remove('hidden');
+                }
+
+            } catch (e) {
+                console.error("Polling error:", e);
+            }
+        }, 1000);
+    }
+
+    function pad(num) {
+        return num.toString().padStart(2, '0');
+    }
+
+    let wizardState = {
+        pendingId: null,
+        mediaType: 'movie', // 'movie' | 'tv'
+        name: '',
+        season: 1,
+        episode: 1,
+        year: ''
+    };
+
+    function openReidentify(id) {
+        wizardState.pendingId = id;
+        // Reset wizard
+        document.getElementById('wiz-name').value = '';
+        document.getElementById('wiz-season').value = '';
+        document.getElementById('wiz-episode').value = '';
+        document.getElementById('wiz-year').value = '';
+        goToStep(1);
+        document.getElementById('reidentify-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+        document.getElementById('reidentify-modal').classList.add('hidden');
+        wizardState.pendingId = null;
+    }
+
+    function goToStep(step) {
+        document.querySelectorAll('.wizard-step').forEach(el => el.classList.add('hidden'));
+        document.getElementById(`step-${step}`).classList.remove('hidden');
+
+        // Focus name input if entering step 2
+        if (step === 2) {
+            setTimeout(() => document.getElementById('wiz-name').focus(), 100);
+        }
+    }
+
+    function setWizardType(type) {
+        wizardState.mediaType = type;
+
+        const tvInputs = document.getElementById('wiz-tv-inputs');
+        const movieInputs = document.getElementById('wiz-movie-inputs');
+        const title = document.getElementById('step-2-title');
+
+        if (type === 'tv') {
+            tvInputs.classList.remove('hidden');
+            movieInputs.classList.add('hidden');
+            title.textContent = "Search TV Show";
+        } else {
+            tvInputs.classList.add('hidden');
+            movieInputs.classList.remove('hidden');
+            title.textContent = "Search Movie";
+        }
+
+        goToStep(2);
+    }
+
+    async function runWizardSearch() {
+        const name = document.getElementById('wiz-name').value.trim();
+        if (!name) return showToast('Please enter a name', 'error');
+
+        wizardState.name = name;
+        wizardState.year = document.getElementById('wiz-year').value.trim();
+
+        if (wizardState.mediaType === 'tv') {
+            wizardState.season = document.getElementById('wiz-season').value.trim();
+            wizardState.episode = document.getElementById('wiz-episode').value.trim();
+
+            if (!wizardState.season || !wizardState.episode) {
+                return showToast('Please enter Season and Episode', 'error');
+            }
+        }
+
+        // Show loading
+        const loader = document.getElementById('wizard-loading');
+        loader.classList.remove('hidden');
+        document.getElementById('wizard-loading-text').textContent = 'Searching TMDb...';
+
+        try {
+            const payload = {
+                query: wizardState.name,
+                type: wizardState.mediaType,
+                year: wizardState.year ? parseInt(wizardState.year) : null
+            };
+
+            const response = await fetch('/api/admin/updates/search_tmdb', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                renderWizardResults(data.results);
+                goToStep(3);
+            } else {
+                showToast(data.detail || 'Search failed', 'error');
+            }
+
+        } catch (e) {
+            console.error(e);
+            showToast('Search failed: Network error', 'error');
+        } finally {
+            loader.classList.add('hidden');
+        }
+    }
+
+    function renderWizardResults(results) {
+        const grid = document.getElementById('wiz-results-grid');
+        grid.innerHTML = '';
+
+        if (results.length === 0) {
+            grid.innerHTML = `
+                <div class="text-center py-8 text-gray-500">
+                    <i class="fas fa-search text-3xl mb-3 opacity-50"></i>
+                    <p>No matches found.</p>
+                </div>
+            `;
+            return;
+        }
+
+        results.forEach(item => {
+            const el = document.createElement('button');
+            el.className = "w-full text-left bg-black/20 hover:bg-black/30 border border-white/10 hover:border-primary rounded-lg p-3 transition-all flex items-start space-x-4 group";
+            el.onclick = () => selectCandidate(item.id);
+
+            const poster = item.poster || '/static/placeholder.jpg';
+            const year = item.year || 'N/A';
+            const overview = item.overview ? (item.overview.substring(0, 100) + '...') : 'No description available.';
+
+            el.innerHTML = `
+                <img src="${poster}" class="w-16 h-24 object-cover rounded shadow-sm flex-shrink-0 bg-gray-900">
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-start">
+                        <h4 class="font-bold text-white group-hover:text-primary transition-colors truncate pr-2">${item.title}</h4>
+                        <span class="text-xs bg-gray-900 text-gray-400 px-2 py-0.5 rounded">${year}</span>
+                    </div>
+                    <p class="text-xs text-gray-400 mt-1 line-clamp-3">${overview}</p>
+                </div>
+            `;
+            grid.appendChild(el);
+        });
+    }
+
+    async function selectCandidate(tmdbId) {
+        // Confirmation or just go? Just go as per typical flow, but show loading.
+        const loader = document.getElementById('wizard-loading');
+        loader.classList.remove('hidden');
+        document.getElementById('wizard-loading-text').textContent = 'Updating Metadata...';
+
+        try {
+            const payload = {
+                pending_id: wizardState.pendingId,
+                tmdb_id: parseInt(tmdbId)
+            };
+
+            // Include S/E overrides if TV
+            if (wizardState.mediaType === 'tv') {
+                payload.season = parseInt(wizardState.season);
+                payload.episode = parseInt(wizardState.episode);
+            }
+
+            const response = await fetch('/api/admin/updates/reidentify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                showToast(data.message, 'success');
+                closeModal();
+                // Refresh grid
+                selections = {};
+                updateBulkBar();
+                document.getElementById('updates-grid').innerHTML = '';
+                currentPage = 1;
+                hasMore = true;
+                loadUpdates();
+            } else {
+                showToast(data.detail || 'Update failed', 'error');
+                loader.classList.add('hidden'); // Only hide if failed, otherwise modal closes
+            }
+        } catch (e) {
+            console.error(e);
+            showToast('Update failed: Network error', 'error');
+            loader.classList.add('hidden');
+        }
+    }
+</script>
+{% endblock %}
