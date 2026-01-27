@@ -907,7 +907,8 @@ class ByteStreamer:
                 pipeline = StreamPipeline(
                     client_index,
                     additional_client_indices,
-                    offset
+                    offset,
+                    queue_size=max(prefetch, 20)
                 )
                 pipeline.ref_count = 1
                 
@@ -993,9 +994,9 @@ class ByteStreamer:
                         else:
                             try:
                                 from Backend.config import Telegram
-                                cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 10)
+                                cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 30)
                             except:
-                                cleanup_delay = 10
+                                cleanup_delay = 30
                             LOGGER.info(f"Stream {stream_id[:8]}: Starting delayed cleanup ({cleanup_delay}s)")
                             pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(stream_id, pipeline))
 
