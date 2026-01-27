@@ -228,13 +228,13 @@ async def media_streamer(
     last_part_cut = (until_bytes % chunk_size) + 1
     part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
 
-    # Generate deterministic stream_id based on file identity + user token
-    # This ensures:
-    # 1. Multiple concurrent HTTP connections from same user = same stream_id
-    # 2. Different users watching same file = different stream_id's
+    # Generate deterministic stream_id based on file identity + user token + START CHUNK
+    # Including start_chunk ensures that SEEKING triggers a new pipeline,
+    # while reusing the pipeline for redundant requests within the same chunk.
     import hashlib
     token = request.path_params.get("token", "unknown")
-    stream_id_base = f"{chat_id}:{id}:{token}"
+    start_chunk = offset // chunk_size
+    stream_id_base = f"{chat_id}:{id}:{token}:{start_chunk}"
     stream_id = hashlib.md5(stream_id_base.encode()).hexdigest()[:16]
     meta = {
         "request_path": str(request.url.path),
