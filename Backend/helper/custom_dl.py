@@ -169,10 +169,15 @@ class ByteStreamer:
             "meta": meta or {},
         }
 
-        ACTIVE_STREAMS[stream_id] = registry_entry
-        work_loads[client_index] += 1
-        for idx in additional_client_indices:
-             work_loads[idx] += 1
+        # Only register and increment workloads if this is a NEW stream
+        # Multiple concurrent HTTP requests for the same file will have the same stream_id
+        is_new_stream = stream_id not in ACTIVE_STREAMS
+        
+        if is_new_stream:
+            ACTIVE_STREAMS[stream_id] = registry_entry
+            work_loads[client_index] += 1
+            for idx in additional_client_indices:
+                 work_loads[idx] += 1
 
         try:
             queue_maxsize = max(1, prefetch)
@@ -337,10 +342,11 @@ class ByteStreamer:
                         pass
 
         except Exception:
-            work_loads[client_index] -= 1
-            for idx in additional_client_indices:
-                if idx in work_loads and work_loads[idx] > 0:
-                    work_loads[idx] -= 1
+            if is_new_stream:
+                work_loads[client_index] -= 1
+                for idx in additional_client_indices:
+                    if idx in work_loads and work_loads[idx] > 0:
+                        work_loads[idx] -= 1
             if stream_id in ACTIVE_STREAMS:
                 del ACTIVE_STREAMS[stream_id]
             raise
@@ -452,13 +458,15 @@ class ByteStreamer:
                     except KeyError:
                         pass
                 finally:
-                    try:
-                        work_loads[client_index] -= 1
-                        for idx in additional_client_indices:
-                             if idx in work_loads and work_loads[idx] > 0:
-                                  work_loads[idx] -= 1
-                    except Exception:
-                        pass
+                    # Only decrement if we were the ones who incremented (is_new_stream)
+                    if is_new_stream:
+                        try:
+                            work_loads[client_index] -= 1
+                            for idx in additional_client_indices:
+                                 if idx in work_loads and work_loads[idx] > 0:
+                                      work_loads[idx] -= 1
+                        except Exception:
+                            pass
 
                 stop_event.set()
 

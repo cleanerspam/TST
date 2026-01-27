@@ -224,7 +224,12 @@ async def media_streamer(
     last_part_cut = (until_bytes % chunk_size) + 1
     part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
 
-    stream_id = secrets.token_hex(8)
+    # Generate deterministic stream_id based on file properties
+    # This ensures multiple concurrent HTTP connections to the same file
+    # share the same ACTIVE_STREAMS entry and workload count
+    import hashlib
+    stream_id_base = f"{chat_id}:{id}:{from_bytes}:{until_bytes}"
+    stream_id = hashlib.md5(stream_id_base.encode()).hexdigest()[:16]
     meta = {
         "request_path": str(request.url.path),
         "client_host": request.client.host if request.client else None,
