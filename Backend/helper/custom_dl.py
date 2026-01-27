@@ -262,7 +262,8 @@ async def _producer_task(
             # LOGGER.debug(f"DEBUG: Waiting for {len(scheduled_tasks)} tasks...")
             done, _ = await asyncio.wait(scheduled_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
             
-            for completed in done:                completed_seq = None
+            for completed in done:
+                completed_seq = None
                 for k, t in list(scheduled_tasks.items()):
                     if t is completed:
                         completed_seq = k
