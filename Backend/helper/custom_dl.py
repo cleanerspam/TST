@@ -74,6 +74,7 @@ class StreamPipeline:
         self.ref_count = 0
         self.error: Optional[Exception] = None
         self.delayed_cleanup_task: Optional[asyncio.Task] = None
+        LOGGER.debug(f"DEBUG: Pipeline created for client_index={client_index} helpers={additional_client_indices}")
         
     def all_client_indices(self) -> List[int]:
         """Returns all bot indices (primary + helpers)"""
@@ -107,8 +108,9 @@ async def _ensure_sessions_ready(
             # Quick check - sessions should already be ready from startup pre-warming
             if file_id.dc_id in getattr(cli, "media_sessions", {}):
                 session_pool.append(cli.media_sessions[file_id.dc_id])
-                LOGGER.debug(f"Stream {stream_id[:8]}: Bot{idx} session ready")
+                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Bot{idx} session ready immediately")
             else:
+                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Bot{idx} session NOT ready matching DC{file_id.dc_id}. Waiting...")
                 # Wait briefly if not immediately available
                 wait_interval = 0.1
                 waited = 0
@@ -152,12 +154,15 @@ async def _producer_task(
     async def fetch_chunk(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
         """Fetch single chunk with retry logic"""
         nonlocal location
+        LOGGER.debug(f"DEBUG: fetch_chunk called seq={seq_idx} off={off}")
         # Check cache first
         cache_key = f"{file_id.dc_id}:{getattr(file_id, 'volume_id', 0)}:{getattr(file_id, 'local_id', 0)}:{off}"
         cached = await GLOBAL_CACHE.get(cache_key)
         if cached:
+            LOGGER.debug(f"DEBUG: Chunk {seq_idx} CACHE HIT")
             return seq_idx, cached
         
+        LOGGER.debug(f"DEBUG: Chunk {seq_idx} CACHE MISS")
         tries = 0
         max_retries = 10
         
@@ -169,6 +174,8 @@ async def _producer_task(
             # Log first attempt of first chunk to verify location/session
             if seq_idx == 0 and tries == 0:
                 LOGGER.info(f"Fetching Chunk 0 using Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'}")
+            
+            LOGGER.debug(f"DEBUG: seq={seq_idx} off={off} try={tries} session={getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'}")
             
             try:
                 # Handle both Client (main bot) and Session (helper) objects
@@ -209,7 +216,8 @@ async def _producer_task(
                      tries += 1
             except Exception as e:
                 tries += 1
-                LOGGER.warning(f"Chunk {seq_idx} error from Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'} (try {tries}/{max_retries}): {type(e).__name__}: {e}")
+                LOGGER.error(f"DEBUG: Chunk {seq_idx} FAILED (try {tries}/{max_retries}). Exception: {type(e).__name__}: {e}")
+                # LOGGER.exception(f"Traceback for chunk {seq_idx}:") # Uncomment for full traceback if needed
                 await asyncio.sleep(0.15 * tries)
             finally:
                 if id(session) in inflight_tracker:
@@ -230,10 +238,13 @@ async def _producer_task(
         next_to_put = 0
         max_parallel = max(1, parallelism)
         
+        LOGGER.debug(f"DEBUG: Producer starting. part_count={part_count} parallel={max_parallel}")
+
         # Schedule initial batch
         for i in range(min(part_count, max_parallel)):
             seq = next_to_schedule
             off = offset + seq * chunk_size
+            LOGGER.debug(f"DEBUG: Scheduling initial chunk seq={seq}")
             task = asyncio.create_task(fetch_chunk(seq, off))
             scheduled_tasks[seq] = task
             next_to_schedule += 1
@@ -241,15 +252,17 @@ async def _producer_task(
         # Main fetch loop
         while next_to_put < part_count:
             if stop_event.is_set():
+                LOGGER.debug("DEBUG: Producer stop_event detected in loop")
                 break
             
             if not scheduled_tasks:
+                LOGGER.debug("DEBUG: No scheduled tasks remaining")
                 break
             
+            # LOGGER.debug(f"DEBUG: Waiting for {len(scheduled_tasks)} tasks...")
             done, _ = await asyncio.wait(scheduled_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
             
-            for completed in done:
-                completed_seq = None
+            for completed in done:                completed_seq = None
                 for k, t in list(scheduled_tasks.items()):
                     if t is completed:
                         completed_seq = k
@@ -260,6 +273,7 @@ async def _producer_task(
                 
                 seq_idx, chunk_bytes = completed.result()
                 scheduled_tasks.pop(completed_seq, None)
+                LOGGER.debug(f"DEBUG: Task for seq={seq_idx} completed")
                 
                 if chunk_bytes is None:
                     LOGGER.error(f"Empty chunk {seq_idx} - aborting stream")
@@ -273,6 +287,7 @@ async def _producer_task(
                 if next_to_schedule < part_count:
                     seq = next_to_schedule
                     off = offset + seq * chunk_size
+                    LOGGER.debug(f"DEBUG: Scheduling next seq={seq}")
                     task = asyncio.create_task(fetch_chunk(seq, off))
                     scheduled_tasks[seq] = task
                     next_to_schedule += 1
@@ -280,9 +295,11 @@ async def _producer_task(
             # Put sequential chunks in queue
             while next_to_put in results_buffer:
                 chunk_bytes = results_buffer.pop(next_to_put)
+                LOGGER.debug(f"DEBUG: Putting seq={next_to_put} to queue (size={len(chunk_bytes)})")
                 await q.put((offset + next_to_put * chunk_size, chunk_bytes))
                 next_to_put += 1
         
+        LOGGER.debug("DEBUG: Producer finished all chunks. Sending None.")
         await q.put((None, None))
     
     except asyncio.CancelledError:
@@ -317,6 +334,7 @@ async def _consumer_generator(
     """
     q = pipeline.queue
     current_part_idx = 1
+    LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Consumer started. Request={request is not None}")
     
     try:
         while True:
@@ -335,8 +353,10 @@ async def _consumer_generator(
             if off_chunk is None or off_chunk == (None, None):
                 break
             
+            
             off, chunk = off_chunk
             if off is None and chunk is None:
+                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Consumer received EOF sentinel")
                 break
             
             # Update stats (only pipeline creator)
@@ -500,6 +520,8 @@ class ByteStreamer:
         """
         if not stream_id:
             stream_id = secrets.token_hex(8)
+
+        LOGGER.debug(f"DEBUG: prefetch_stream called: stream_id={stream_id} offset={offset} clients={len(additional_client_indices)+1}")
         
         pipeline = None
         is_pipeline_creator = False
@@ -515,6 +537,7 @@ class ByteStreamer:
                     
                     if offset_diff > valid_reuse_range:
                         LOGGER.info(f"Stream {stream_id[:8]}: SEEK DETECTED (offset {offset} vs start {pipeline.start_offset}). Creating NEW pipeline.")
+                        LOGGER.debug(f"DEBUG: Seek diff: {offset_diff} > {valid_reuse_range}")
                         # CRITICAL: Stop the old producer to prevent "zombie" tasks
                         pipeline.stop_event.set()
                         pipeline = None # Trigger creation logic below
@@ -625,10 +648,12 @@ class ByteStreamer:
 
     async def _delayed_cleanup(self, stream_id: str, pipeline: StreamPipeline):
         LOGGER.info(f"Stream {stream_id[:8]}: Starting delayed cleanup (10s)")
+        LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Delayed cleanup started. Current ref_count={pipeline.ref_count}")
         try:
             await asyncio.sleep(10)
             
             async with PIPELINE_LOCK:
+                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Delayed cleanup woke up. ref_count={pipeline.ref_count}")
                 # Check if still valid for cleanup (might have been reused during sleep)
                 if pipeline.ref_count <= 0:
                     LOGGER.info(f"Stream {stream_id[:8]}: Performing final cleanup")
