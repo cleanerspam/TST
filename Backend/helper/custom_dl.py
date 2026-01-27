@@ -168,9 +168,18 @@ async def _producer_task(
                 LOGGER.info(f"Fetching Chunk 0 using Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'}")
             
             try:
-                r = await session.send(
-                    raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
-                )
+                # Handle both Client (main bot) and Session (helper) objects
+                if hasattr(session, "invoke"):
+                    # It's a Client object (Home DC)
+                    r = await session.invoke(
+                         raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
+                    )
+                else:
+                    # It's a Session object (Helper DC)
+                    r = await session.send(
+                        raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
+                    )
+
                 chunk_bytes = getattr(r, "bytes", None) if r else None
                 
                 if chunk_bytes:
@@ -178,8 +187,8 @@ async def _producer_task(
                     
                     # Log every 10th chunk for debugging
                     if seq_idx % 10 == 0:
-                        session_idx = session_pool.index(session) if session in session_pool else -1
-                        LOGGER.debug(f"Stream {stream_id[:8]}: Chunk {seq_idx} by session {session_idx}")
+                        session_name = getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'
+                        LOGGER.debug(f"Stream {stream_id[:8]}: Chunk {seq_idx} by Bot{session_name}")
                 
                 return seq_idx, chunk_bytes
             except Exception as e:
