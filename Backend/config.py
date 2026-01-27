@@ -21,6 +21,9 @@ class Telegram:
     
     # Stream cleanup delay in seconds (how long to wait before cleaning up idle streams)
     STREAM_CLEANUP_DELAY = int(getenv("STREAM_CLEANUP_DELAY", "600"))
+    
+    # Smart cleanup: How far (in MB) user can seek before old pipeline is cancelled
+    SEEK_THRESHOLD_MB = int(getenv("SEEK_THRESHOLD_MB", "5"))
 
     AUTH_CHANNEL = [channel.strip() for channel in (getenv("AUTH_CHANNEL") or "").split(",") if channel.strip()]
     DATABASE = [db.strip() for db in (getenv("DATABASE") or "").split(",") if db.strip()]

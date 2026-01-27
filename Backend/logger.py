@@ -17,7 +17,7 @@ stream_handler.setFormatter(formatter)
 
 basicConfig(
     handlers=[file_handler, stream_handler],
-    level=DEBUG
+    level=INFO
 )
 
 getLogger("httpx").setLevel(ERROR)
@@ -26,6 +26,6 @@ getLogger("fastapi").setLevel(ERROR)
 
 
 LOGGER = getLogger(__name__)
-LOGGER.setLevel(DEBUG)
+LOGGER.setLevel(INFO)
 
 LOGGER.info("Logger initialized with IST timezone.")

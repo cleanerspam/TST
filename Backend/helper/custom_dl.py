@@ -856,6 +856,55 @@ class ByteStreamer:
         try:
             # === PHASE 1: Create Pipeline (Always New) ===
             async with PIPELINE_LOCK:
+                # Enhancement: Smart cleanup - Cancel old pipelines if new offset is far away
+                from Backend.config import Telegram
+                SEEK_THRESHOLD_MB = getattr(Telegram, 'SEEK_THRESHOLD_MB', 5)
+                SEEK_THRESHOLD_BYTES = SEEK_THRESHOLD_MB * 1024 * 1024
+                
+                # Find existing pipelines for same stream_id
+                pipelines_to_cancel = []
+                for pid, existing_pipeline in list(STREAM_PIPELINES.items()):
+                    if pid.startswith(stream_id + "_"):  # Same stream_id base
+                        offset_diff = abs(existing_pipeline.start_offset - offset)
+                        
+                        if offset_diff > SEEK_THRESHOLD_BYTES:
+                            # Far seek detected - cancel immediately
+                            LOGGER.info(
+                                f"Stream {stream_id[:8]}: Far seek detected "
+                                f"({offset_diff / (1024*1024):.1f}MB difference). "
+                                f"Cancelling old pipeline {pid[-8:]}"
+                            )
+                            pipelines_to_cancel.append((pid, existing_pipeline))
+                        else:
+                            # Close position - let normal cleanup handle it
+                            LOGGER.debug(
+                                f"Stream {stream_id[:8]}: Close position detected "
+                                f"({offset_diff / (1024*1024):.1f}MB). "
+                                f"Keeping old pipeline alive"
+                            )
+                
+                # Cancel far-away pipelines immediately
+                for pid, old_pipeline in pipelines_to_cancel:
+                    old_pipeline.stop_event.set()
+                    if old_pipeline.producer_task and not old_pipeline.producer_task.done():
+                        old_pipeline.producer_task.cancel()
+                    
+                    # Decrement workloads immediately
+                    try:
+                        if work_loads[old_pipeline.client_index] > 0:
+                            work_loads[old_pipeline.client_index] -= 1
+                        for idx in old_pipeline.additional_client_indices:
+                            if idx in work_loads and work_loads[idx] > 0:
+                                work_loads[idx] -= 1
+                    except:
+                        pass
+                    
+                    # Remove from tracking
+                    STREAM_PIPELINES.pop(pid, None)
+                    if pid in ACTIVE_STREAMS:
+                        ACTIVE_STREAMS[pid]["status"] = "cancelled_far_seek"
+                        RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(pid))
+                
                 # We do NOT check STREAM_PIPELINES for reuse anymore to prevent
                 # multiple consumers stealing chunks from the same queue.
                 
