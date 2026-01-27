@@ -244,7 +244,7 @@ async def media_streamer(
     # Start usage tracking in background
     asyncio.create_task(track_usage_from_stats(stream_id, request.path_params.get("token"), token_data))
 
-    body_gen = await tg_connect.prefetch_stream(
+    body_gen = tg_connect.prefetch_stream(
         file_id=file_id,
         client_index=client_idx,
         additional_client_indices=additional_client_indices,
@@ -259,6 +259,7 @@ async def media_streamer(
         parallelism=Telegram.PARALLEL,
         request=request,
     )
+
 
     file_name = file_id.file_name or f"{secrets.token_hex(2)}.unknown"
     mime_type = file_id.mime_type or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
