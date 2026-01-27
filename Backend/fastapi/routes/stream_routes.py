@@ -226,7 +226,8 @@ async def media_streamer(
     offset = from_bytes - (from_bytes % chunk_size)
     first_part_cut = from_bytes - offset
     last_part_cut = (until_bytes % chunk_size) + 1
-    part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
+    
+    part_count = (until_bytes // chunk_size) - (offset // chunk_size) + 1
 
     # Generate deterministic stream_id based on file identity + user token
     # This ensures:
