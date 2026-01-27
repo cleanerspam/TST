@@ -457,6 +457,7 @@ async def _producer_task(
                 circuit_breaker.record_failure(cache_key)
                 # LINEAR delay: 0.15s, 0.30s, 0.45s, 0.60s, ... up to 1.5s max
                 delay = min(0.15 * tries, 1.5)
+                print(f"CRITICAL: Chunk {seq_idx} FAILED: {type(e).__name__}: {e}") # Force output
                 LOGGER.error(f"[{stream_id[:8]}]: Chunk {seq_idx} FAILED (try {tries}/{max_retries}): {type(e).__name__}: {e}")
                 LOGGER.debug(f"[{stream_id[:8]}]: Retry delay: {delay:.2f}s")
                 await asyncio.sleep(delay)
