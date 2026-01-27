@@ -136,8 +136,6 @@ async def _producer_task(
     part_count: int,
     chunk_size: int,
     parallelism: int,
-    chunk_size: int,
-    parallelism: int,
     stream_id: str,
     byte_streamer = None,
     chat_id: int = 0,
