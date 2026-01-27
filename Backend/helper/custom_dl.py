@@ -378,6 +378,8 @@ class ByteStreamer:
 
     def __init__(self, client: Client):
         self.client = client
+        if not hasattr(self.client, "media_sessions"):
+            self.client.media_sessions = {}
         self._file_id_cache: Dict[int, FileId] = {}
         self._session_lock = asyncio.Lock()
         asyncio.create_task(self._clean_cache())
@@ -429,10 +431,10 @@ class ByteStreamer:
                         break
                 
                 self.client.media_sessions[dc] = session
-                LOGGER.debug(f"Pre-warmed media session for DC {dc}")
+                LOGGER.info(f"Bot{self.client.name if hasattr(self.client, 'name') else '?'} - Pre-warmed DC {dc}")
                 
             except Exception as e:
-                LOGGER.debug(f"Could not pre-warm DC {dc}: {e}")
+                LOGGER.warning(f"Could not pre-warm DC {dc}: {e}")
                 continue
 
     async def get_file_properties(self, chat_id: int, message_id: int) -> FileId:
