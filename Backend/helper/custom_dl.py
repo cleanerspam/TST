@@ -217,6 +217,7 @@ async def _producer_task(
             except Exception as e:
                 tries += 1
                 LOGGER.error(f"DEBUG: Chunk {seq_idx} FAILED (try {tries}/{max_retries}). Exception: {type(e).__name__}: {e}")
+                print(f"CRITICAL DEBUG: Chunk {seq_idx} FAILED: {e}") # Dirty debug to bypass logger issues
                 # LOGGER.exception(f"Traceback for chunk {seq_idx}:") # Uncomment for full traceback if needed
                 await asyncio.sleep(0.15 * tries)
             finally:
@@ -674,7 +675,8 @@ class ByteStreamer:
                     
                     # Decrement workloads (last consumer cleans up)
                     try:
-                        work_loads[pipeline.client_index] -= 1
+                        if work_loads[pipeline.client_index] > 0:
+                            work_loads[pipeline.client_index] -= 1
                         for idx in pipeline.additional_client_indices:
                             if idx in work_loads and work_loads[idx] > 0:
                                 work_loads[idx] -= 1
