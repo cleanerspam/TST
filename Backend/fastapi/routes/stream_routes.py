@@ -199,6 +199,10 @@ async def media_streamer(
     client_idx = client_indices[0]
     additional_client_indices = client_indices[1:]
     
+    # Debug: Log which bots were selected
+    from Backend.logger import LOGGER
+    LOGGER.info(f"Stream starting: Selected bots {client_indices} for DC{target_dc} (Primary: Bot{client_idx}, Helpers: {additional_client_indices})")
+    
     faster_client = multi_clients[client_idx]
     
     # Ensure ByteStreamer exists for ALL selected clients (Primary + Helpers)
@@ -224,11 +228,13 @@ async def media_streamer(
     last_part_cut = (until_bytes % chunk_size) + 1
     part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
 
-    # Generate deterministic stream_id based on file properties
-    # This ensures multiple concurrent HTTP connections to the same file
-    # share the same ACTIVE_STREAMS entry and workload count
+    # Generate deterministic stream_id based on file identity + user token
+    # This ensures:
+    # 1. Multiple concurrent HTTP connections from same user = same stream_id
+    # 2. Different users watching same file = different stream_id's
     import hashlib
-    stream_id_base = f"{chat_id}:{id}:{from_bytes}:{until_bytes}"
+    token = request.path_params.get("token", "unknown")
+    stream_id_base = f"{chat_id}:{id}:{token}"
     stream_id = hashlib.md5(stream_id_base.encode()).hexdigest()[:16]
     meta = {
         "request_path": str(request.url.path),

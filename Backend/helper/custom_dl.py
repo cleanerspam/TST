@@ -198,6 +198,11 @@ class ByteStreamer:
                 except Exception:
                     pass
             
+            # Debug: Log session pool details
+            LOGGER.info(f"Stream {stream_id[:8]}: Built session pool with {len(session_pool)} sessions for DC{file_id.dc_id}")
+            if len(session_pool) < len(additional_client_indices) + 1:
+                LOGGER.warning(f"Stream {stream_id[:8]}: Only {len(session_pool)}/{len(additional_client_indices)+1} sessions ready (some helpers not pre-warmed yet)")
+            
             LOGGER.debug(f"Stream {stream_id}: Using {len(session_pool)} sessions for DC {file_id.dc_id}")
 
             # Load Balancing: Track pending requests per session
