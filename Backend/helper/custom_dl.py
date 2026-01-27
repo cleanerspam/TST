@@ -490,10 +490,18 @@ class ByteStreamer:
             # === PHASE 1: Get or Create Pipeline ===
             async with PIPELINE_LOCK:
                 if stream_id in STREAM_PIPELINES:
-                    # Reuse existing
+                    # Check for Seek
                     pipeline = STREAM_PIPELINES[stream_id]
-                    pipeline.ref_count += 1
-                    LOGGER.info(f"Stream {stream_id[:8]}: Reusing pipeline (ref={pipeline.ref_count})")
+                    offset_diff = abs(offset - pipeline.start_offset)
+                    valid_reuse_range = chunk_size * 2
+                    
+                    if offset_diff > valid_reuse_range:
+                        LOGGER.info(f"Stream {stream_id[:8]}: SEEK DETECTED (offset {offset} vs start {pipeline.start_offset}). Creating NEW pipeline.")
+                        pipeline = None # Trigger creation logic below
+                    else:
+                        # Reuse existing
+                        pipeline.ref_count += 1
+                        LOGGER.info(f"Stream {stream_id[:8]}: Reusing pipeline (ref={pipeline.ref_count})")
                 else:
                     # Create new
                     is_pipeline_creator = True
