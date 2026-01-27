@@ -20,7 +20,7 @@ class Telegram:
     CACHE_SIZE_MB = int(getenv("CACHE_SIZE_MB", "4096"))
     
     # Stream cleanup delay in seconds (how long to wait before cleaning up idle streams)
-    STREAM_CLEANUP_DELAY = int(getenv("STREAM_CLEANUP_DELAY", "30"))
+    STREAM_CLEANUP_DELAY = int(getenv("STREAM_CLEANUP_DELAY", "600"))
 
     AUTH_CHANNEL = [channel.strip() for channel in (getenv("AUTH_CHANNEL") or "").split(",") if channel.strip()]
     DATABASE = [db.strip() for db in (getenv("DATABASE") or "").split(",") if db.strip()]
