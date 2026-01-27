@@ -21,7 +21,7 @@ async def get_system_stats_api():
         active_streams_data = []
         PRUNE_SECONDS = 3
         # Use list() to allow modification of dict during iteration
-        for stream_id, info in list(ACTIVE_STREAMS.items()):
+        for pipeline_id, info in list(ACTIVE_STREAMS.items()):
             status = info.get("status")
             # Use end_ts if available, else last_ts, else now
             stop_time = info.get("end_ts", info.get("last_ts", now))
@@ -30,13 +30,26 @@ async def get_system_stats_api():
                 if (now - stop_time > PRUNE_SECONDS):
                     try:
                         RECENT_STREAMS.appendleft(info)
-                        ACTIVE_STREAMS.pop(stream_id)
+                        ACTIVE_STREAMS.pop(pipeline_id)
                     except KeyError:
                         pass
                     continue
 
+            # Get cache stats - use the original stream_id, not pipeline_id
+            original_stream_id = info.get("stream_id", pipeline_id)
+            try:
+                from Backend.helper.custom_dl import GLOBAL_CACHE
+                cache_stats = GLOBAL_CACHE.get_stream_stats(original_stream_id)
+                cached_mb = round(cache_stats['cached_mb'], 1)
+                cache_chunks = cache_stats['chunks']
+            except Exception:
+                cached_mb = 0.0
+                cache_chunks = 0
+
             active_streams_data.append({
-                "stream_id": stream_id,
+                "cached_mb": cached_mb,
+                "cache_chunks": cache_chunks,
+                "stream_id": pipeline_id,
                 "msg_id": info.get("msg_id"),
                 "chat_id": info.get("chat_id"),
                 "status": info.get("status", "active"),

@@ -413,10 +413,12 @@ async def _producer_task(
                     await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
                     
+                    
                     # Update download speed stats (only for actual Telegram downloads)
-                    if stream_id in ACTIVE_STREAMS:
+                    # Use pipeline_id since ACTIVE_STREAMS keys are pipeline IDs
+                    if pipeline_id in ACTIVE_STREAMS:
                         try:
-                            entry = ACTIVE_STREAMS[stream_id]
+                            entry = ACTIVE_STREAMS[pipeline_id]
                             chunk_len = len(chunk_bytes)
                             
                             # Track recent download measurements (not cache hits)
