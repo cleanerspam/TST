@@ -399,6 +399,8 @@ async def _producer_task(
                     await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
                     
+                    print(f"DEBUG: Chunk {seq_idx} retrieved ({len(chunk_bytes)}B)")
+
                     if seq_idx == 0:
                          LOGGER.info(f"Stream {stream_id[:8]}: Chunk 0 SUCCEEDED ({len(chunk_bytes)} bytes)")
 
