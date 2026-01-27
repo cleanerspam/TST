@@ -378,16 +378,20 @@ async def _producer_task(
             
             try:
                 # Handle both Client (main bot) and Session (helper) objects
+                async with asyncio.timeout(15) if hasattr(asyncio, "timeout") else asyncio.wait_for(asyncio.sleep(0), 15): # Fallback/Compatibility hack, wait.. direct wait_for is better
+                    pass
+
+                # Cleaner implementation using try/except around the call
                 if hasattr(session, "invoke"):
                     # It's a Client object (Home DC)
-                    r = await session.invoke(
+                    r = await asyncio.wait_for(session.invoke(
                          raw.functions.upload.GetFile(location=current_location, offset=off, limit=chunk_size)
-                    )
+                    ), timeout=15)
                 else:
                     # It's a Session object (Helper DC)
-                    r = await session.send(
+                    r = await asyncio.wait_for(session.send(
                         raw.functions.upload.GetFile(location=current_location, offset=off, limit=chunk_size)
-                    )
+                    ), timeout=15)
 
                 chunk_bytes = getattr(r, "bytes", None) if r else None
                 
@@ -395,6 +399,9 @@ async def _producer_task(
                     await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
                     
+                    if seq_idx == 0:
+                         LOGGER.info(f"Stream {stream_id[:8]}: Chunk 0 SUCCEEDED ({len(chunk_bytes)} bytes)")
+
                     # Log every 10th chunk for debugging
                     if seq_idx % 10 == 0:
                         LOGGER.debug(f"Stream {stream_id[:8]}: Chunk {seq_idx} by Bot{get_session_name(session)}")
