@@ -29,14 +29,14 @@ app = FastAPI(
 )
 
 async def background_usage_reset():
-    """Runs usage reset every 6 hours to handle day/month rollovers."""
+    """Runs usage reset every 10 minutes to handle day/month rollovers."""
     while True:
         try:
             await db.reset_api_usage_stats()
         except Exception as e:
             # Import logger if needed, or just print
             print(f"Error in usage reset task: {e}")
-        await sleep(21600)  # 6 hours
+        await sleep(600)  # 6 hours
 
 @app.on_event("startup")
 async def startup_event():
@@ -52,7 +52,7 @@ async def startup_event():
     # Pre-warm all bot sessions for instant streaming
     LOGGER.info("Pre-warming bot sessions for all DCs...")
     
-    for idx, client in enumerate(multi_clients):
+    for idx, client in multi_clients.items():
         if client not in class_cache:
             class_cache[client] = ByteStreamer(client)
             LOGGER.debug(f"Created ByteStreamer for Bot{idx}")
