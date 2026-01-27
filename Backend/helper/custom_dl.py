@@ -163,6 +163,10 @@ async def _producer_task(
             session = min(session_pool, key=lambda s: inflight_tracker.get(id(s), 0))
             inflight_tracker[id(session)] += 1
             
+            # Log first attempt of first chunk to verify location/session
+            if seq_idx == 0 and tries == 0:
+                LOGGER.info(f"Fetching Chunk 0 using Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'}")
+            
             try:
                 r = await session.send(
                     raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
@@ -180,8 +184,7 @@ async def _producer_task(
                 return seq_idx, chunk_bytes
             except Exception as e:
                 tries += 1
-                if "RPCError" in str(e):
-                    LOGGER.warning(f"Chunk {seq_idx} error (try {tries}/{max_retries}): {getattr(e, 'NAME', e)}")
+                LOGGER.warning(f"Chunk {seq_idx} error from Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'} (try {tries}/{max_retries}): {type(e).__name__}: {e}")
                 await asyncio.sleep(0.15 * tries)
             finally:
                 if id(session) in inflight_tracker:
