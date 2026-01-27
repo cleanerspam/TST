@@ -40,8 +40,28 @@ async def background_usage_reset():
 
 @app.on_event("startup")
 async def startup_event():
+    from Backend.logger import LOGGER
+    from Backend.helper.custom_dl import ByteStreamer
+    from Backend.pyrofork.bot import multi_clients
+    from Backend.fastapi.routes.stream_routes import class_cache
+    
+    # Start background tasks
     create_task(db.clean_expired_pending_updates())
     create_task(background_usage_reset())
+    
+    # Pre-warm all bot sessions for instant streaming
+    LOGGER.info("Pre-warming bot sessions for all DCs...")
+    
+    for idx, client in enumerate(multi_clients):
+        if client not in class_cache:
+            class_cache[client] = ByteStreamer(client)
+            LOGGER.debug(f"Created ByteStreamer for Bot{idx}")
+    
+    # Give background pre-warming tasks time to complete
+    # Each bot pre-warms DCs 1,2,4,5 in parallel
+    await sleep(12)
+    
+    LOGGER.info(f"✓ All {len(multi_clients)} bot sessions pre-warmed and ready!")
 
 # --- Middleware Setup ---
 app.add_middleware(SessionMiddleware, secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0")

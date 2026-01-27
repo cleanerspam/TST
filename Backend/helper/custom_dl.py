@@ -91,11 +91,11 @@ async def _ensure_sessions_ready(
     file_id: FileId,
     additional_client_indices: List[int],
     stream_id: str,
-    max_wait: float = 10.0
+    max_wait: float = 2.0  # Reduced from 10.0 since pre-warming happens at startup
 ) -> List:
     """
-    Ensures all bot sessions are pre-warmed before starting producer.
-    This is CRITICAL for achieving 3x speed from chunk 0.
+    Collects ready bot sessions for the producer.
+    Sessions are pre-warmed at application startup, so this is just a safety check.
     
     Returns: List of ready sessions [primary, helper1, helper2, ...]
     """
@@ -105,25 +105,25 @@ async def _ensure_sessions_ready(
         try:
             cli = multi_clients[idx]
             
-            # Ensure ByteStreamer exists
-            from Backend.fastapi.routes.stream_routes import class_cache
-            if cli not in class_cache:
-                class_cache[cli] = ByteStreamer(cli)
-            
-            # BLOCKING wait for session
-            wait_interval = 0.1
-            waited = 0
-            while waited < max_wait:
-                if file_id.dc_id in getattr(cli, "media_sessions", {}):
-                    session_pool.append(cli.media_sessions[file_id.dc_id])
-                    LOGGER.debug(f"Stream {stream_id[:8]}: Bot{idx} session ready ({waited:.1f}s)")
-                    break
-                await asyncio.sleep(wait_interval)
-                waited += wait_interval
+            # Quick check - sessions should already be ready from startup pre-warming
+            if file_id.dc_id in getattr(cli, "media_sessions", {}):
+                session_pool.append(cli.media_sessions[file_id.dc_id])
+                LOGGER.debug(f"Stream {stream_id[:8]}: Bot{idx} session ready")
             else:
-                LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} timeout after {max_wait}s")
+                # Wait briefly if not immediately available
+                wait_interval = 0.1
+                waited = 0
+                while waited < max_wait:
+                    if file_id.dc_id in getattr(cli, "media_sessions", {}):
+                        session_pool.append(cli.media_sessions[file_id.dc_id])
+                        LOGGER.debug(f"Stream {stream_id[:8]}: Bot{idx} session ready after {waited:.1f}s")
+                        break
+                    await asyncio.sleep(wait_interval)
+                    waited += wait_interval
+                else:
+                    LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} session not ready after {max_wait}s (pre-warming may have failed)")
         except Exception as e:
-            LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} failed: {e}")
+            LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} error: {e}")
     
     return session_pool
 
