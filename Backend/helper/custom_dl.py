@@ -399,8 +399,6 @@ async def _producer_task(
                     await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
                     
-                    print(f"DEBUG: Chunk {seq_idx} retrieved ({len(chunk_bytes)}B)")
-
                     if seq_idx == 0:
                          LOGGER.info(f"Stream {stream_id[:8]}: Chunk 0 SUCCEEDED ({len(chunk_bytes)} bytes)")
 
@@ -517,7 +515,6 @@ async def _producer_task(
         for i in range(min(part_count, max_parallel)):
             seq = next_to_schedule
             off = offset + seq * chunk_size
-            print(f"DEBUG [{stream_id[:8]}]: Scheduling initial chunk seq={seq}")
             LOGGER.debug(f"DEBUG [{stream_id[:8]}]: Scheduling initial chunk seq={seq}")
             task = asyncio.create_task(fetch_chunk(seq, off))
             scheduled_tasks[seq] = task
@@ -587,7 +584,6 @@ async def _producer_task(
                 
                 seq_idx, chunk_bytes = completed.result()
                 scheduled_tasks.pop(completed_seq, None)
-                print(f"DEBUG [{stream_id[:8]}]: Task for seq={seq_idx} completed. Bytes={len(chunk_bytes) if chunk_bytes else 'None'}")
                 LOGGER.debug(f"DEBUG [{stream_id[:8]}]: Task for seq={seq_idx} completed")
                 
                 if chunk_bytes is None:
@@ -602,7 +598,6 @@ async def _producer_task(
                 if next_to_schedule < part_count:
                     seq = next_to_schedule
                     off = offset + seq * chunk_size
-                    print(f"DEBUG [{stream_id[:8]}]: Scheduling next seq={seq}")
                     LOGGER.debug(f"DEBUG [{stream_id[:8]}]: Scheduling next seq={seq}")
                     task = asyncio.create_task(fetch_chunk(seq, off))
                     scheduled_tasks[seq] = task

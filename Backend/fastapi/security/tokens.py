@@ -3,8 +3,29 @@ from fastapi import HTTPException
 from Backend import db
 
 
+import time
+
+TOKEN_CACHE = {}  # token -> (data, timestamp)
+CACHE_TTL = 60    # 1 minute
+
 async def verify_token(token: str):
-    token_data = await db.get_api_token(token)
+    now = time.time()
+    
+    # Check cache
+    if token in TOKEN_CACHE:
+        data, ts = TOKEN_CACHE[token]
+        if now - ts < CACHE_TTL:
+            token_data = data
+            # Use cached data
+        else:
+            token_data = await db.get_api_token(token)
+            if token_data:
+                TOKEN_CACHE[token] = (token_data, now)
+    else:
+        token_data = await db.get_api_token(token)
+        if token_data:
+            TOKEN_CACHE[token] = (token_data, now)
+
     if not token_data:
         raise HTTPException(status_code=401, detail="Invalid or expired API token")
         
