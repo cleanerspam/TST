@@ -13,7 +13,7 @@ class Telegram:
     PORT = int(getenv("PORT", "8000"))
 
     PARALLEL = int(getenv("PARALLEL", "5"))
-    PRE_FETCH = int(getenv("PRE_FETCH", "75"))
+    PRE_FETCH = int(getenv("PRE_FETCH", "150"))
     WORKERS = int(getenv("WORKERS", "50"))
     
     # Chunk cache size in MB (default 4GB for optimal streaming performance)
