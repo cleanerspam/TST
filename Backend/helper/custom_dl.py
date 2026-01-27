@@ -296,8 +296,15 @@ async def _producer_task(
         nonlocal location
         LOGGER.debug(f"DEBUG [{stream_id[:8]}]: fetch_chunk called seq={seq_idx} off={off}")
         
-        # Check cache first
-        cache_key = f"{file_id.dc_id}:{getattr(file_id, 'volume_id', 0)}:{getattr(file_id, 'local_id', 0)}:{off}"
+        # Check cache first - use file_unique_id for proper file isolation
+        # This prevents different files from sharing cache keys when volume_id/local_id are missing
+        file_unique_id = getattr(file_id, 'unique_id', None)
+        if not file_unique_id:
+            # Fallback to file_reference hex if unique_id not available
+            file_ref = getattr(file_id, 'file_reference', b'')
+            file_unique_id = file_ref.hex() if file_ref else f"fallback_{file_id.dc_id}_{getattr(file_id, 'media_id', 0)}"
+        
+        cache_key = f"{file_unique_id}:{off}"
         
         # Check circuit breaker BEFORE attempting fetch
         if circuit_breaker.is_open(cache_key):
