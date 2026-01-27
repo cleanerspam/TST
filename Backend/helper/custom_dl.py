@@ -399,6 +399,9 @@ class ByteStreamer:
                 current_dc = await self.client.storage.dc_id()
  
                 if dc == current_dc:
+                    # If this is the bot's home DC, use the client itself
+                    self.client.media_sessions[dc] = self.client
+                    LOGGER.info(f"Bot{self.client.name if hasattr(self.client, 'name') else '?'} - Pre-warmed DC {dc} (Home DC)")
                     continue
                 
                 auth_key = await Auth(self.client, dc, test_mode).create()
