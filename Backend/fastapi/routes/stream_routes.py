@@ -276,6 +276,9 @@ async def media_streamer(
         "Access-Control-Expose-Headers": "Content-Length, Content-Range, Accept-Ranges",
         "X-Stream-Id": stream_id,
     }
+
+    if range_header:
+        headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
     
     status_code = 206 if range_header else 200
     if range_header:
