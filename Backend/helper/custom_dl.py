@@ -351,12 +351,17 @@ async def _producer_task(
                 # File reference expired - try to refresh
                 LOGGER.warning(f"Stream {stream_id[:8]}: FileReferenceExpired detected, refreshing...")
                 try:
-                    if byte_streamer:
+                    # Only attempt refresh if we have valid metadata
+                    if byte_streamer and chat_id and message_id:
                          new_file_id = await byte_streamer.get_file_properties(chat_id, message_id, force_refresh=True)
                          # Update location for future requests in this producer
                          location = await byte_streamer._get_location(new_file_id)
                          tries = 0  # Reset tries to give the new reference a chance
                          continue
+                    else:
+                         LOGGER.error(f"Stream {stream_id[:8]}: Cannot refresh file reference - missing chat_id ({chat_id}) or message_id ({message_id})")
+                         circuit_breaker.record_failure(cache_key)
+                         tries += 1
                 except Exception as refresh_exc:
                      LOGGER.error(f"Stream {stream_id[:8]}: Failed to refresh file reference: {refresh_exc}")
                      circuit_breaker.record_failure(cache_key)
@@ -743,6 +748,8 @@ class ByteStreamer:
         parallelism: int = 3,  # Increased from 2 to utilize 3-bot pipeline effectively
         request: Optional[Request] = None,
         additional_client_indices: List[int] = [],
+        chat_id: int = 0,
+        message_id: int = 0,
     ):
         """
         Streaming with Global Pipeline Manager.
@@ -888,7 +895,9 @@ class ByteStreamer:
                     _producer_task(
                         pipeline, file_id, session_pool, location,
                         offset, part_count, chunk_size, parallelism, stream_id,
-                        byte_streamer=self, chat_id=file_id.chat_id, message_id=file_id.local_id
+                        byte_streamer=self, 
+                        chat_id=chat_id, 
+                        message_id=message_id
                     )
                 )
             

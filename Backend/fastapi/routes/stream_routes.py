@@ -258,6 +258,8 @@ async def media_streamer(
         meta=meta,
         parallelism=Telegram.PARALLEL,
         request=request,
+        chat_id=chat_id,
+        message_id=id,
     )
 
 
