@@ -67,6 +67,8 @@ class CircuitBreaker:
 
 
 ACTIVE_STREAMS: Dict[str, Dict] = {}
+LOCATION_CACHE = OrderedDict()
+LOCATION_CACHE_TTL = 3000 # 50 minutes
 RECENT_STREAMS = deque(maxlen=3)
 
 class ChunkCache:
@@ -318,12 +320,27 @@ async def _producer_task(
         
         async def get_bot_location(idx):
              if idx in bot_locations: return bot_locations[idx]
+             
+             # Check Global Cache
+             cache_key_loc = f"{idx}:{chat_id}:{message_id}"
+             if cache_key_loc in LOCATION_CACHE:
+                 loc, ts = LOCATION_CACHE[cache_key_loc]
+                 if time.time() - ts < LOCATION_CACHE_TTL:
+                     bot_locations[idx] = loc
+                     return loc
+             
              try:
                  client = multi_clients.get(idx)
                  if not client or not chat_id or not message_id: return None
                  fid = await get_file_ids(client, chat_id, message_id)
                  loc = await ByteStreamer._get_location(fid)
+                 
+                 # Update caches
                  bot_locations[idx] = loc
+                 LOCATION_CACHE[cache_key_loc] = (loc, time.time())
+                 if len(LOCATION_CACHE) > 500:
+                     LOCATION_CACHE.popitem(last=False)
+                     
                  return loc
              except Exception as e:
                  LOGGER.warning(f"Failed to fetch location for Bot{idx}: {e}")
@@ -387,7 +404,8 @@ async def _producer_task(
             except FileReferenceExpired:
                 # File reference expired for this SPECIFIC bot
                 if bot_idx is not None:
-                    bot_locations.pop(bot_idx, None) # Invalidate cache
+                    bot_locations.pop(bot_idx, None) # Invalidate local
+                    LOCATION_CACHE.pop(f"{bot_idx}:{chat_id}:{message_id}", None) # Invalidate global
                 
                 refresh_attempts += 1
                 if refresh_attempts >= max_refresh_attempts:
@@ -397,8 +415,26 @@ async def _producer_task(
                      continue
 
                 LOGGER.warning(f"Stream {stream_id[:8]}: FileReferenceExpired for Bot{bot_idx}, refreshing...")
-                await asyncio.sleep(0.5)
-                tries = 0 # Retry immediately with fresh ref
+                
+                try:
+                    if bot_idx is not None and chat_id and message_id:
+                         client = multi_clients.get(bot_idx)
+                         await asyncio.sleep(0.5)
+                         # Use helper to get ID for THIS client
+                         new_file_id = await get_file_ids(client, chat_id, message_id) 
+                         new_location = await ByteStreamer._get_location(new_file_id)
+                         
+                         # Update caches
+                         bot_locations[bot_idx] = new_location
+                         LOCATION_CACHE[f"{bot_idx}:{chat_id}:{message_id}"] = (new_location, time.time())
+                         
+                         LOGGER.info(f"Stream {stream_id[:8]}: File reference refreshed successfully for Bot{bot_idx}")
+                         tries = 0 
+                         continue
+                except Exception as e:
+                     LOGGER.error(f"Refresh failed for Bot{bot_idx}: {e}")
+                
+                tries += 1
                 continue
 
             
