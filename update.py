@@ -56,7 +56,7 @@ if UPSTREAM_REPO:
         try:
             commit_info = srun("git log -1 --format='%h - %s'", shell=True, capture_output=True, text=True).stdout.strip()
             log_info(f"Successfully updated with latest commits!! [{commit_info}]")
-        except:
-            log_info("Successfully updated with latest commits!!")
+        except Exception as e:
+            log_info(f"Successfully updated with latest commits!! (Log Error: {e})")
     else:
         log_error("❌ Update failed! Retry or ask for support.")

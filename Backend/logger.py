@@ -26,6 +26,6 @@ getLogger("fastapi").setLevel(ERROR)
 
 
 LOGGER = getLogger(__name__)
-LOGGER.setLevel(DEBUG)
+LOGGER.setLevel(INFO)
 
 LOGGER.info("Logger initialized with IST timezone.")
