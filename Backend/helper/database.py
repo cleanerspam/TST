@@ -105,6 +105,10 @@ class Database:
         
         # In-memory task tracking
         self.active_tasks: Dict[str, Dict[str, Any]] = {}
+        self.bot_client = None
+
+    def set_bot_client(self, client):
+        self.bot_client = client
 
     async def connect(self):
         try:
@@ -147,31 +151,27 @@ class Database:
     async def _fetch_telegram_file_info(self, encoded_id):
         """
         Fetch file info from Telegram if missing in DB.
-        Lazy imports StreamBot to avoid circular deps.
+        Uses self.bot_client injected at startup.
         """
-        # Lazy import to avoid circular dependency
-        from Backend.pyrofork.bot import StreamBot, multi_clients
+        if not self.bot_client:
+            LOGGER.warning("Bot client not set in Database - skipping file info fetch")
+            return None, None
+
         try:
             decoded = await decode_string(encoded_id)
             chat_id = int(f"-100{decoded['chat_id']}")
             msg_id = int(decoded['msg_id'])
             
-            # Round Robin / Random selection for load balancing
-            client = StreamBot
-            if multi_clients:
-                client = random.choice(list(multi_clients.values()))
+            # Use the injected client (load balancing handled by client pool if implemented there, 
+            # but here we just use the main bot instance passed in)
+            client = self.bot_client
             
             try:
                 message = await client.get_messages(chat_id, msg_id)
             except FloodWait as e:
-                LOGGER.warning(f"FloodWait {e.value}s on {client.name}. Retrying with another bot...")
-                # Try one failover if multi_clients available
-                if multi_clients:
-                    client = random.choice(list(multi_clients.values()))
-                    message = await client.get_messages(chat_id, msg_id)
-                else:
-                    await asyncio.sleep(e.value)
-                    message = await client.get_messages(chat_id, msg_id)
+                LOGGER.warning(f"FloodWait {e.value}s on fetch_info. Sleeping...")
+                await asyncio.sleep(e.value)
+                message = await client.get_messages(chat_id, msg_id)
                     
             if not message or message.empty:
                 return None, None
@@ -287,6 +287,45 @@ class Database:
         LOGGER.info(f"Switched to storage_{self.current_db_index}")
         return await func(*args)
 
+    async def _find_existing_media(self, collection_name: str, imdb_id: str = None, tmdb_id: int = None, title: str = None, release_year: int = None):
+        """
+        Helper to find existing media across all storage shards.
+        Returns: (document, db_key, db_index) or (None, None, None)
+        """
+        total_storage_dbs = len(self.dbs) - 1
+        for db_index in range(1, total_storage_dbs + 1):
+            db_key = f"storage_{db_index}"
+            media = None
+            if imdb_id:
+                media = await self.dbs[db_key][collection_name].find_one({"imdb_id": imdb_id})
+            if not media and tmdb_id:
+                media = await self.dbs[db_key][collection_name].find_one({"tmdb_id": tmdb_id})
+            if not media and title and release_year:
+                media = await self.dbs[db_key][collection_name].find_one({
+                    "title": title, 
+                    "release_year": release_year
+                })
+            
+            if media:
+                return media, db_key, db_index
+        
+        return None, None, None
+
+    async def _delete_telegram_file_async(self, file_id_str: str, log_name: str = "file"):
+        """Safely delete a file from Telegram channel."""
+        if not file_id_str:
+            return
+        try:
+            decoded_data = await decode_string(file_id_str)
+            chat_id = int(f"-100{decoded_data['chat_id']}")
+            msg_id = int(decoded_data['msg_id'])
+            create_task(delete_message(chat_id, msg_id))
+            if log_name:
+                LOGGER.info(f"Queued deletion of {log_name}")
+        except Exception as e:
+            LOGGER.error(f"Failed to queue deletion for {log_name}: {e}")
+
+
 
     # -------------------------------
     # Multi Database Method for insert/update/delete/list
@@ -378,39 +417,23 @@ class Database:
             LOGGER.error(f"Validation error: {e}")
             return None
 
-        imdb_id = movie_dict["imdb_id"]
-        tmdb_id = movie_dict["tmdb_id"]
-        title = movie_dict["title"]
-        release_year = movie_dict["release_year"]
+        imdb_id = movie_dict.get("imdb_id")
+        tmdb_id = movie_dict.get("tmdb_id")
+        title = movie_dict.get("title")
+        release_year = movie_dict.get("release_year")
+        
         quality_to_update = movie_dict["telegram"][0]
         target_quality = quality_to_update["quality"]
         
-        total_storage_dbs = len(self.dbs) - 1  
+        total_storage_dbs = len(self.dbs) - 1
         current_db_key = f"storage_{self.current_db_index}"
-        existing_db_key = None
-        existing_db_index = None
-        existing_movie = None
-
-
         
-        for db_index in range(1, total_storage_dbs + 1):
-            db_key = f"storage_{db_index}"
-            movie = None
-            if imdb_id:
-                movie = await self.dbs[db_key]["movie"].find_one({"imdb_id": imdb_id})
-            if not movie and tmdb_id:
-                movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
-            if not movie and title and release_year:
-                movie = await self.dbs[db_key]["movie"].find_one({
-                    "title": title, 
-                    "release_year": release_year
-                })
-            if movie:
-                existing_db_key = db_key
-                existing_db_index = db_index
-                existing_movie = movie
-                break
+        # 1. Find Existing Movie
+        existing_movie, existing_db_key, existing_db_index = await self._find_existing_media(
+            "movie", imdb_id, tmdb_id, title, release_year
+        )
 
+        # 2. Insert New if Not Found
         if not existing_movie:
             try:
                 movie_dict["db_index"] = self.current_db_index
@@ -418,115 +441,74 @@ class Database:
                 return result.inserted_id
             except Exception as e:
                 LOGGER.error(f"Insertion failed in {current_db_key}: {e}")
-                if any(keyword in str(e).lower() for keyword in ["storage", "quota"]):
+                if "storage" in str(e).lower() or "quota" in str(e).lower():
                     return await self._handle_storage_error(self.update_movie, movie_data, total_storage_dbs=total_storage_dbs)
                 return None
 
+        # 3. Handle Existing Movie
         movie_id = existing_movie["_id"]
         existing_qualities = existing_movie.get("telegram", [])
         matching_quality = next((q for q in existing_qualities if q["quality"] == target_quality), None)
-        
+
         if matching_quality and not force_update:
-            # Check if this is a fuzzy duplicate (same normalized name + size)
+            # Check Fuzzy Duplicate
             if _is_fuzzy_duplicate(matching_quality, quality_to_update):
-                # Fuzzy duplicate detected - decide which file to delete
                 delete_existing_file = _should_delete_existing(matching_quality, quality_to_update)
                 
                 if delete_existing_file:
-                    # Delete OLDER document file, keep NEWER video file
-                    try:
-                        old_id = matching_quality.get("id")
-                        if old_id:
-                            decoded_data = await decode_string(old_id)
-                            chat_id = int(f"-100{decoded_data['chat_id']}")
-                            msg_id = int(decoded_data['msg_id'])
-                            create_task(delete_message(chat_id, msg_id))
-                            LOGGER.info(f"Fuzzy duplicate detected (normalized name + size match). Older is document, newer is video. Deleting older document: {matching_quality.get('name')}")
-                    except Exception as e:
-                        LOGGER.error(f"Failed to delete old document file: {e}")
+                    # Delete OLDER document, keep NEWER video
+                    await self._delete_telegram_file_async(matching_quality.get("id"), "old document file")
                     
-                    # Replace old document with new video in database
+                    # Update DB: Remove old, add new
                     existing_qualities = [q for q in existing_qualities if q["quality"] != target_quality]
                     existing_qualities.append(quality_to_update)
+                    
                     existing_movie["telegram"] = existing_qualities
                     existing_movie["updated_on"] = datetime.utcnow()
                     
-                    # Update in database
                     try:
                         await self.dbs[existing_db_key]["movie"].replace_one({"_id": movie_id}, existing_movie)
                         LOGGER.info(f"Replaced document file with video file for {title}")
                         return movie_id
                     except Exception as e:
-                        LOGGER.error(f"Failed to update movie after replacing file: {e}")
+                        LOGGER.error(f"Failed to update movie db: {e}")
                         return None
                 else:
-                    # Delete NEWER file (keep existing)
-                    try:
-                        new_id = quality_to_update.get("id")
-                        if new_id:
-                            decoded_data = await decode_string(new_id)
-                            chat_id = int(f"-100{decoded_data['chat_id']}")
-                            msg_id = int(decoded_data['msg_id'])
-                            create_task(delete_message(chat_id, msg_id))
-                            
-                            existing_type = matching_quality.get("file_type", "video")
-                            new_type = quality_to_update.get("file_type", "video")
-                            if existing_type == new_type:
-                                LOGGER.info(f"Fuzzy duplicate detected (normalized name + size match, same file type). Auto-deleting newer file: {quality_to_update.get('name')}")
-                            else:
-                                LOGGER.info(f"Fuzzy duplicate detected (normalized name + size match). Older is video, newer is document. Deleting newer document: {quality_to_update.get('name')}")
-                    except Exception as e:
-                        LOGGER.error(f"Failed to delete new duplicate file: {e}")
+                    # Delete NEWER file (keep existing) -- Auto-delete incoming
+                    ex_type = matching_quality.get("file_type", "video")
+                    new_type = quality_to_update.get("file_type", "video")
+                    log_msg = f"newer file ({new_type})" if ex_type != new_type else "newer file (fuzzy duplicate)"
+                    LOGGER.info(f"Fuzzy duplicate: {log_msg}. Deleting {quality_to_update.get('name')}")
                     
-                    # Don't add to database, just return existing movie_id
+                    await self._delete_telegram_file_async(quality_to_update.get("id"), "new duplicate file")
                     return movie_id
             else:
-                # Not a fuzzy duplicate - different file characteristics
-                # Send to pending updates for manual review
+                 # Not a fuzzy duplicate - Push to Pending
                 try:
-                    LOGGER.info("Duplicate quality found with different file characteristics. Pushing to pending updates...")
-                    
-                    # Extract relevant info
+                    LOGGER.info("Duplicate quality found (different characteristics). Pushing to pending...")
                     pending_entry = PendingUpdateSchema(
-                        tmdb_id=tmdb_id,
-                        media_type="movie",
-                        quality=target_quality,
-                        new_file=quality_to_update, 
+                        tmdb_id=tmdb_id, media_type="movie", quality=target_quality,
+                        new_file=quality_to_update,
                         metadata={
-                            "title": title,
-                            "year": release_year,
-                            "poster": movie_dict.get("poster"),
-                            "backdrop": movie_dict.get("backdrop")
+                            "title": title, "year": release_year,
+                            "poster": movie_dict.get("poster"), "backdrop": movie_dict.get("backdrop")
                         }
                     )
                     return await self.insert_pending_update(pending_entry)
-
                 except Exception as e:
                     LOGGER.error(f"Failed to queue pending update: {e}")
                     return None
+        
         elif matching_quality and force_update:
-            # FORCE UPDATE: Replace the existing quality
-            LOGGER.info(f"Force update: Replacing existing {target_quality} quality")
+            LOGGER.info(f"Force update: Replacing {target_quality}")
+            await self._delete_telegram_file_async(matching_quality.get("id"), "old file (force update)")
             
-            # Delete old file from Telegram
-            try:
-                old_id = matching_quality.get("id")
-                if old_id:
-                    decoded_data = await decode_string(old_id)
-                    chat_id = int(f"-100{decoded_data['chat_id']}")
-                    msg_id = int(decoded_data['msg_id'])
-                    create_task(delete_message(chat_id, msg_id))
-                    LOGGER.info(f"Queued deletion of old file: {matching_quality.get('name')}")
-            except Exception as e:
-                LOGGER.error(f"Failed to queue old file for deletion: {e}")
-            
-            # Replace the quality entry
             existing_qualities = [q for q in existing_qualities if q["quality"] != target_quality]
             existing_qualities.append(quality_to_update)
         else:
-            # No matching quality, just append
+             # Just append new quality
             existing_qualities.append(quality_to_update)
-            
+
         existing_movie["telegram"] = existing_qualities
         existing_movie["updated_on"] = datetime.utcnow()
 

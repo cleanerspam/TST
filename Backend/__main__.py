@@ -10,6 +10,7 @@ from Backend.fastapi import server
 from Backend.helper.pyro import restart_notification, setup_bot_commands
 from Backend.pyrofork.bot import Helper, StreamBot
 from Backend.pyrofork.clients import initialize_clients
+from Backend.helper.workload_sanitizer import sanitize_workloads
 
 loop = get_event_loop()
 
@@ -23,6 +24,7 @@ async def start_services():
         
         await StreamBot.start()
         StreamBot.username = StreamBot.me.username
+        db.set_bot_client(StreamBot)
         LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
         await asleep(1.2)
 
@@ -34,6 +36,10 @@ async def start_services():
         LOGGER.info("Initializing Multi Clients...")
         await initialize_clients()
         await asleep(2)
+        
+        # Start workload sanitizer for auto-correction
+        loop.create_task(sanitize_workloads())
+        LOGGER.info("Workload Sanitizer enabled")
 
         await setup_bot_commands(StreamBot)
         await asleep(2)

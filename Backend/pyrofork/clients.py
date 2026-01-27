@@ -3,7 +3,7 @@ from pyrogram import Client
 from pyrogram.errors import FloodWait
 from Backend.logger import LOGGER
 from Backend.config import Telegram
-from Backend.pyrofork.bot import multi_clients, work_loads, StreamBot
+from Backend.pyrofork.bot import multi_clients, work_loads, StreamBot, client_dc_map
 from os import environ
 
 class TokenParser:
@@ -38,8 +38,18 @@ async def start_client(client_id, token):
             bot_token=token,
             sleep_threshold=100,
             no_updates=True,
-            in_memory=True
+            in_memory=True,
+            max_concurrent_transmissions=100
         ).start()
+        
+        try:
+            client_dc = await client.storage.dc_id()
+            client_dc_map[client_id] = client_dc
+            LOGGER.info(f"Client {client_id} connected to DC {client_dc}")
+        except Exception as e:
+            LOGGER.warning(f"Could not get DC for Client {client_id}: {e}")
+            client_dc_map[client_id] = None
+
         work_loads[client_id] = 0
         return client_id, client
     except FloodWait as e:
@@ -51,6 +61,15 @@ async def start_client(client_id, token):
 
 async def initialize_clients():
     multi_clients[0], work_loads[0] = StreamBot, 0
+
+    try:
+        main_dc = await StreamBot.storage.dc_id()
+        client_dc_map[0] = main_dc
+        LOGGER.info(f"Main StreamBot connected to DC {main_dc}")
+    except Exception as e:
+        LOGGER.warning(f"Could not get DC for StreamBot: {e}")
+        client_dc_map[0] = None
+
     all_tokens = TokenParser.parse_from_env()
     if not all_tokens:
         LOGGER.info("No additional Bot Clients found, Using default client")
@@ -70,7 +89,7 @@ async def initialize_clients():
             LOGGER.error(f"Critical error initializing client {i}: {e}")
 
     if len(multi_clients) != 1:
-        LOGGER.info(f"Multi-Client Mode Enabled with {len(multi_clients)} clients")
+        LOGGER.info(f"Multi-Client Mode Enabled with {len(multi_clients)} clients. DC Map: {client_dc_map}")
     else:
         LOGGER.info("No additional clients were initialized, using default client")
 

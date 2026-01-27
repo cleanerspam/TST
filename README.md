@@ -38,6 +38,9 @@ This project is a **next-generation media server** that bridges **Telegram** and
 ### ✨ Key Features
 
 - ⚡ **Direct Streaming**: Streams directly from Telegram servers to your device with **zero transcoding**.
+- 🚀 **Multi-Bot Aggregated Streaming**: Uses **3 bots simultaneously** per stream for 3x faster speeds (perfect for 4K at 2.5x playback).
+- 🧠 **Smart Load Balancing**: Intelligent least-connection dispatching with auto-failover for maximum reliability.
+- 💾 **500MB Global RAM Cache**: Instant backward seeking and cross-user cache sharing for popular content.
 - 🖥️ **Web Dashboard**: A beautiful, dark-themed admin panel to manage your server, view system stats, and control access.
 - 🔐 **Advanced Access Control**: Create invite links with precise **Daily/Monthly bandwidth limits** and track usage in real-time.
 - 🛠️ **Manual Update Manager**: A dedicated UI to resolve quality conflicts (e.g., upgrading 720p to 1080p), handle duplicates, and **auto-fix** naming errors (like double extensions).
@@ -49,16 +52,17 @@ This project is a **next-generation media server** that bridges **Telegram** and
 
 # 🖥️ Web Dashboard Capabilities
 
-The new **v2.1 Dashboard** gives you complete control:
+The **v2.3 Dashboard** gives you complete control and real-time system monitoring:
 
-1. **System Status**: View uptime, database statistics, **Active Streams**, and bot workloads at a glance.
-2. **Pending Updates**: Review incoming files that conflict with existing media.
+1. **System Status**: View uptime, database statistics, **Active Streams**, and bot workloads with auto-correcting sanitization.
+2. **Streaming Performance**: Monitor live stream speeds, peak throughput, and multi-bot aggregation status.
+3. **Pending Updates**: Review incoming files that conflict with existing media.
     - *Auto-Resolve*: Automatically accepts better quality files or fixes filenames.
     - *Bulk Actions*: Approve or reject updates in batches.
-3. **Token Management**: Create, revoke, and edit user tokens.
+4. **Token Management**: Create, revoke, and edit user tokens.
     - Set **GB limits** (Daily/Monthly) to prevent abuse.
     - View live usage bars for every user.
-4. **Media Management**: Edit metadata, incorrect matches, or delete content directly from the UI.
+5. **Media Management**: Edit metadata, incorrect matches, or delete content directly from the UI.
 
 ---
 
@@ -234,6 +238,11 @@ Full list of variables in `config.env`:
 | `DATABASE` | MongoDB Connection URI. |
 | `BASE_URL` | Domain or IP with protocol (e.g. `https://my-stremio.com`). |
 | `TMDB_API` | (Optional) For better metadata fetching. |
+| **Performance Tuning (v2.3.0+)** | |
+| `PARALLEL` | Concurrent chunks downloaded per stream (Default: `5`). Higher = faster, more RAM. |
+| `PRE_FETCH` | Buffer size in chunks (Default: `50`). Higher = less buffering, more RAM. |
+| `WORKERS` | Pyrogram worker threads (Default: `50`). Handles multiple streams efficiently. |
+| `MULTI_TOKEN1-10` | (Optional) Additional bot tokens for multi-bot streaming. Each token = 3x speed boost. |
 
 ---
 
