@@ -308,14 +308,51 @@ async def _producer_task(
             return seq_idx, cached
         
         LOGGER.debug(f"DEBUG [{stream_id[:8]}]: Chunk {seq_idx} CACHE MISS")
+        
+        # Setup multi-bot location tracking if not already done
+        client_map = {id(c): k for k, c in multi_clients.items()}
+        primary_bot_idx = client_map.get(id(byte_streamer.client)) if byte_streamer else 0
+        
+        # Current valid locations per bot
+        bot_locations = {primary_bot_idx: location}
+        
+        async def get_bot_location(idx):
+             if idx in bot_locations: return bot_locations[idx]
+             try:
+                 client = multi_clients.get(idx)
+                 if not client or not chat_id or not message_id: return None
+                 fid = await get_file_ids(client, chat_id, message_id)
+                 loc = await ByteStreamer._get_location(fid)
+                 bot_locations[idx] = loc
+                 return loc
+             except Exception as e:
+                 LOGGER.warning(f"Failed to fetch location for Bot{idx}: {e}")
+                 return None
+
+        def get_bot_idx_from_session(s):
+             if hasattr(s, 'invoke'): return client_map.get(id(s)) # Client
+             return client_map.get(id(s.client)) if hasattr(s, 'client') else None
+        
         tries = 0
+        refresh_attempts = 0
         max_retries = 10
+        max_refresh_attempts = 6
         
         while tries < max_retries and not stop_event.is_set():
             # Least-loaded session selection
             session = min(session_pool, key=lambda s: inflight_tracker.get(id(s), 0))
             inflight_tracker[id(session)] += 1
             
+            # Determine which bot this is
+            bot_idx = get_bot_idx_from_session(session)
+            
+            # Get valid location for THIS bot
+            current_location = await get_bot_location(bot_idx)
+            if not current_location:
+                 # Fallback/Fail for this bot, try next session
+                 tries += 1
+                 continue
+
             # Log first attempt of first chunk to verify location/session
             if seq_idx == 0 and tries == 0:
                 LOGGER.info(f"Fetching Chunk 0 using Bot{get_session_name(session)}")
@@ -327,12 +364,12 @@ async def _producer_task(
                 if hasattr(session, "invoke"):
                     # It's a Client object (Home DC)
                     r = await session.invoke(
-                         raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
+                         raw.functions.upload.GetFile(location=current_location, offset=off, limit=chunk_size)
                     )
                 else:
                     # It's a Session object (Helper DC)
                     r = await session.send(
-                        raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
+                        raw.functions.upload.GetFile(location=current_location, offset=off, limit=chunk_size)
                     )
 
                 chunk_bytes = getattr(r, "bytes", None) if r else None
@@ -348,24 +385,22 @@ async def _producer_task(
                 return seq_idx, chunk_bytes
             
             except FileReferenceExpired:
-                # File reference expired - try to refresh
-                LOGGER.warning(f"Stream {stream_id[:8]}: FileReferenceExpired detected, refreshing...")
-                try:
-                    # Only attempt refresh if we have valid metadata
-                    if byte_streamer and chat_id and message_id:
-                         new_file_id = await byte_streamer.get_file_properties(chat_id, message_id, force_refresh=True)
-                         # Update location for future requests in this producer
-                         location = await byte_streamer._get_location(new_file_id)
-                         tries = 0  # Reset tries to give the new reference a chance
-                         continue
-                    else:
-                         LOGGER.error(f"Stream {stream_id[:8]}: Cannot refresh file reference - missing chat_id ({chat_id}) or message_id ({message_id})")
-                         circuit_breaker.record_failure(cache_key)
-                         tries += 1
-                except Exception as refresh_exc:
-                     LOGGER.error(f"Stream {stream_id[:8]}: Failed to refresh file reference: {refresh_exc}")
+                # File reference expired for this SPECIFIC bot
+                if bot_idx is not None:
+                    bot_locations.pop(bot_idx, None) # Invalidate cache
+                
+                refresh_attempts += 1
+                if refresh_attempts >= max_refresh_attempts:
+                     LOGGER.error(f"Stream {stream_id[:8]}: Max refresh attempts ({max_refresh_attempts}) reached")
                      circuit_breaker.record_failure(cache_key)
                      tries += 1
+                     continue
+
+                LOGGER.warning(f"Stream {stream_id[:8]}: FileReferenceExpired for Bot{bot_idx}, refreshing...")
+                await asyncio.sleep(0.5)
+                tries = 0 # Retry immediately with fresh ref
+                continue
+
             
             except FloodWait as e:
                 # Telegram rate limiting - wait with cap
