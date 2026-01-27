@@ -10,7 +10,7 @@ class TokenParser:
     @staticmethod
     def parse_from_env():
         tokens = {
-            c + 1: t
+            c + 1: tl
             for c, (_, t) in enumerate(
                 filter(
                     lambda n: n[0].startswith("MULTI_TOKEN"), 
@@ -30,7 +30,7 @@ async def wait_and_start(client_id, token, wait_time):
 
 async def start_client(client_id, token):
     try:
-        LOGGER.info(f"Starting - Bot Client {client_id}")
+        LOGGER.debug(f"Starting - Bot Client {client_id}")
         client = await Client(
             name=str(client_id),
             api_id=Telegram.API_ID,
@@ -45,7 +45,7 @@ async def start_client(client_id, token):
         try:
             client_dc = await client.storage.dc_id()
             client_dc_map[client_id] = client_dc
-            LOGGER.info(f"Client {client_id} connected to DC {client_dc}")
+            LOGGER.debug(f"Client {client_id} connected to DC {client_dc}")
         except Exception as e:
             LOGGER.warning(f"Could not get DC for Client {client_id}: {e}")
             client_dc_map[client_id] = None
@@ -65,7 +65,7 @@ async def initialize_clients():
     try:
         main_dc = await StreamBot.storage.dc_id()
         client_dc_map[0] = main_dc
-        LOGGER.info(f"Main StreamBot connected to DC {main_dc}")
+        LOGGER.debug(f"Main StreamBot connected to DC {main_dc}")
     except Exception as e:
         LOGGER.warning(f"Could not get DC for StreamBot: {e}")
         client_dc_map[0] = None

@@ -50,7 +50,8 @@ async def startup_event():
     create_task(background_usage_reset())
     
     # Pre-warm all bot sessions for instant streaming
-    LOGGER.info("Pre-warming bot sessions for all DCs...")
+    # Pre-warm all bot sessions for instant streaming
+    LOGGER.info(f"Pre-warming connections for {len(multi_clients)} bots...")
     
     for idx, client in multi_clients.items():
         if client not in class_cache:
@@ -61,7 +62,7 @@ async def startup_event():
     # Each bot pre-warms DCs 1,2,4,5 in parallel
     await sleep(12)
     
-    LOGGER.info(f"✓ All {len(multi_clients)} bot sessions pre-warmed and ready!")
+    LOGGER.info("✓ Pre-warming complete.")
 
 # --- Middleware Setup ---
 app.add_middleware(SessionMiddleware, secret_key="f6d2e3b9a0f43d9a2e6a56b2d3175cd9c05bbfe31d95ed2a7306b57cb1a8b6f0")

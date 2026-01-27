@@ -52,6 +52,11 @@ if UPSTREAM_REPO:
     log_info(f"UPSTREAM_REPO: {repo_url} | UPSTREAM_BRANCH: {UPSTREAM_BRANCH}")
 
     if update.returncode == 0:
-        log_info("Successfully updated with latest commits!!")
+        # Get commit info
+        try:
+            commit_info = srun("git log -1 --format='%h - %s'", shell=True, capture_output=True, text=True).stdout.strip()
+            log_info(f"Successfully updated with latest commits!! [{commit_info}]")
+        except:
+            log_info("Successfully updated with latest commits!!")
     else:
         log_error("❌ Update failed! Retry or ask for support.")

@@ -13,8 +13,14 @@ class Telegram:
     PORT = int(getenv("PORT", "8000"))
 
     PARALLEL = int(getenv("PARALLEL", "5"))
-    PRE_FETCH = int(getenv("PRE_FETCH", "50"))
+    PRE_FETCH = int(getenv("PRE_FETCH", "75"))
     WORKERS = int(getenv("WORKERS", "50"))
+    
+    # Chunk cache size in MB (default 4GB for optimal streaming performance)
+    CACHE_SIZE_MB = int(getenv("CACHE_SIZE_MB", "4096"))
+    
+    # Stream cleanup delay in seconds (how long to wait before cleaning up idle streams)
+    STREAM_CLEANUP_DELAY = int(getenv("STREAM_CLEANUP_DELAY", "10"))
 
     AUTH_CHANNEL = [channel.strip() for channel in (getenv("AUTH_CHANNEL") or "").split(",") if channel.strip()]
     DATABASE = [db.strip() for db in (getenv("DATABASE") or "").split(",") if db.strip()]
@@ -24,8 +30,8 @@ class Telegram:
     UPSTREAM_REPO = getenv("UPSTREAM_REPO", "")
     UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "")
 
-    OWNER_ID = int(getenv("OWNER_ID", "5422223708"))
+    OWNER_ID = int(getenv("OWNER_ID", "123456789"))
 
-    ADMIN_USERNAME = getenv("ADMIN_USERNAME", "fyvio")
-    ADMIN_PASSWORD = getenv("ADMIN_PASSWORD", "fyvio")
+    ADMIN_USERNAME = getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD = getenv("ADMIN_PASSWORD", "password")
     

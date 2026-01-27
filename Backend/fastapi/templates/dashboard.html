@@ -151,6 +151,11 @@
                                     <span class="text-sm font-semibold">{{ "%.2f"|format(stream.total_bytes / 1024 /
                                         1024) }} MiB</span>
                                 </div>
+                                <div class="flex justify-between py-2 px-3 bg-white rounded col-span-2">
+                                    <span class="text-sm theme-text-secondary">Cached:</span>
+                                    <span class="text-sm font-semibold">{{ stream.cached_mb }} MiB ({{
+                                        stream.cache_chunks }} chunks)</span>
+                                </div>
                             </div>
 
                             <div class="grid grid-cols-3 gap-3">
@@ -877,9 +882,12 @@
                                             <span class="text-sm font-semibold">${stream.duration}s</span>
                                         </div>
                                         
-                                        <div class="flex justify-between py-2 px-3 bg-white rounded col-span-2">
                                             <span class="text-sm theme-text-secondary">Data Transferred:</span>
                                             <span class="text-sm font-semibold">${(stream.total_bytes / 1024 / 1024).toFixed(2)} MB</span>
+                                        </div>
+                                        <div class="flex justify-between py-2 px-3 bg-white rounded col-span-2">
+                                            <span class="text-sm theme-text-secondary">Cached:</span>
+                                            <span class="text-sm font-semibold">${stream.cached_mb} MiB (${stream.cache_chunks} chunks)</span>
                                         </div>
                                     </div>
 

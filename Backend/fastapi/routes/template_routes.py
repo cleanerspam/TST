@@ -8,7 +8,7 @@ from Backend.pyrofork.bot import work_loads, multi_clients, StreamBot
 from Backend.helper.pyro import get_readable_time
 from Backend import StartTime, __version__
 import time
-from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS
+from Backend.helper.custom_dl import ACTIVE_STREAMS, RECENT_STREAMS, GLOBAL_CACHE
 
 
 templates = Jinja2Templates(directory="Backend/fastapi/templates")
@@ -80,7 +80,18 @@ async def dashboard_page(request: Request, _: bool = Depends(require_auth)):
 
         active_streams_data = []
         for stream_id, info in ACTIVE_STREAMS.items():
+            # Get cache stats
+            try:
+                cache_stats = GLOBAL_CACHE.get_stream_stats(stream_id)
+                cached_mb = round(cache_stats['cached_mb'], 1)
+                cache_chunks = cache_stats['chunks']
+            except:
+                cached_mb = 0.0
+                cache_chunks = 0
+
             active_streams_data.append({
+                "cached_mb": cached_mb,
+                "cache_chunks": cache_chunks,
                 "stream_id": stream_id,
                 "msg_id": info.get("msg_id"),
                 "chat_id": info.get("chat_id"),
