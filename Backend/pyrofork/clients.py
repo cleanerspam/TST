@@ -84,7 +84,7 @@ async def initialize_clients():
                 multi_clients[cid] = client
             
             # Delay to prevent FloodWait from Telegram
-            await sleep(2)
+            await sleep(0.2)
         except Exception as e:
             LOGGER.error(f"Critical error initializing client {i}: {e}")
 
