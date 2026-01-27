@@ -277,6 +277,7 @@ async def _producer_task(
     chunk_size: int,
     parallelism: int,
     stream_id: str,
+    pipeline_id: str,
     byte_streamer = None,
     chat_id: int = 0,
     message_id: int = 0
@@ -396,7 +397,7 @@ async def _producer_task(
                 chunk_bytes = getattr(r, "bytes", None) if r else None
                 
                 if chunk_bytes:
-                    await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
+                    await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=pipeline_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
                     
                     if seq_idx == 0:
@@ -506,7 +507,7 @@ async def _producer_task(
             CHECK_INTERVAL = 10  # Default: every 10 chunks (10MB)
         
         # Enhancement 3: Pin this stream's chunks in cache to prevent eviction during playback
-        GLOBAL_CACHE.pin_stream(stream_id)
+        GLOBAL_CACHE.pin_stream(pipeline_id)
         LOGGER.debug(f"[{stream_id[:8]}]: Stream pinned in cache")
         
         LOGGER.debug(f"DEBUG [{stream_id[:8]}]: Producer starting. part_count={part_count} parallel={max_parallel}  (sessions={len(session_pool)}) check_interval={CHECK_INTERVAL}")
@@ -629,7 +630,7 @@ async def _producer_task(
             pass
     finally:
         # Enhancement 3: Unpin stream from cache when producer stops
-        GLOBAL_CACHE.unpin_stream(stream_id)
+        GLOBAL_CACHE.unpin_stream(pipeline_id)
         LOGGER.debug(f"[{stream_id[:8]}]: Stream unpinned from cache")
 
 
@@ -920,7 +921,7 @@ class ByteStreamer:
                 pipeline.producer_task = asyncio.create_task(
                     _producer_task(
                         pipeline, file_id, session_pool, location,
-                        offset, part_count, chunk_size, parallelism, stream_id,
+                        offset, part_count, chunk_size, parallelism, stream_id, pipeline_id,
                         byte_streamer=self, 
                         chat_id=chat_id, 
                         message_id=message_id
@@ -993,9 +994,9 @@ class ByteStreamer:
                     
                     # Enhancement 11: Stream lifecycle logging with metrics
                     # Move to RECENT_STREAMS with enhanced tracking
-                    if stream_id in ACTIVE_STREAMS:
+                    if pipeline_id in ACTIVE_STREAMS:
                         try:
-                            entry = ACTIVE_STREAMS[stream_id]
+                            entry = ACTIVE_STREAMS[pipeline_id]
                             end_ts = time.time()
                             duration = end_ts - entry["start_ts"]
                             entry.update({
@@ -1003,7 +1004,7 @@ class ByteStreamer:
                                 "duration": duration,
                                 "status": entry.get("status", "finished"),
                             })
-                            RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(stream_id))
+                            RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(pipeline_id))
                             
                             # Log lifecycle summary
                             LOGGER.info(
@@ -1028,7 +1029,7 @@ class ByteStreamer:
                     except Exception as cache_err:
                         LOGGER.debug(f"Error getting cache stats: {cache_err}")
                     
-                    STREAM_PIPELINES.pop(stream_id, None)
+                    STREAM_PIPELINES.pop(pipeline_id, None)
                 else:
                      LOGGER.info(f"Stream {stream_id[:8]}: Cleanup aborted (ref_count={pipeline.ref_count})")
         
