@@ -843,72 +843,21 @@ class ByteStreamer:
         pipeline = None
         is_pipeline_creator = False
         
+        # Force a unique pipeline ID for every request to avoid queue sharing (race conditions)
+        # But keep the cache_key (based on stream_id) same for cache hits.
+        pipeline_id = f"{stream_id}_{secrets.token_hex(4)}"
+
+        LOGGER.debug(f"DEBUG: prefetch_stream called: stream_id={stream_id} pipeline_id={pipeline_id} offset={offset} clients={len(additional_client_indices)+1}")
+        
+        pipeline = None
+        is_pipeline_creator = False
+        
         try:
-            # === PHASE 1: Get or Create Pipeline ===
+            # === PHASE 1: Create Pipeline (Always New) ===
             async with PIPELINE_LOCK:
-                if stream_id in STREAM_PIPELINES:
-                    # Enhancement 9: Smart Seek Optimization
-                    pipeline = STREAM_PIPELINES[stream_id]
-                    offset_diff = offset - pipeline.start_offset  # Signed difference
-                    offset_diff_abs = abs(offset_diff)
-                    
-                    # Current settings from user feedback:
-                    # - User wants new pipeline for seeks > 2MB
-                    # - But we can be smarter for small FORWARD seeks
-                    BACKWARD_SEEK_THRESHOLD = chunk_size * 2  # 2MB - always recreate on backward seek
-                    FORWARD_SEEK_THRESHOLD = chunk_size * 50  # 50MB - keep pipeline for small forward seeks
-                    
-                    should_recreate = False
-                    reason = ""
-                    
-                    if pipeline.stop_event.is_set():
-                        should_recreate = True
-                        reason = "STOPPED_EVENT"
-                    elif offset_diff < 0:
-                        # Backward seek - always recreate (user may want earlier content)
-                        if offset_diff_abs > BACKWARD_SEEK_THRESHOLD:
-                            should_recreate = True
-                            reason = "BACKWARD_SEEK"
-                    else:
-                        # Forward seek - be smart!
-                        # Small forward seeks (<50 chunks): keep pipeline, producer will catch up
-                        # Large forward seeks (>50 chunks): recreate to avoid fetching unwanted chunks
-                        if offset_diff_abs > FORWARD_SEEK_THRESHOLD:
-                            should_recreate = True
-                            reason = "LARGE_FORWARD_SEEK"
-                    
-                    if should_recreate:
-                        LOGGER.info(
-                            f"Stream {stream_id[:8]}: {reason} (offset {offset} vs start {pipeline.start_offset}, "
-                            f"diff={offset_diff / (1024*1024):.1f}MB). Creating NEW pipeline."
-                        )
-                        LOGGER.debug(f"DEBUG: Reuse check: diff={offset_diff} stop={pipeline.stop_event.is_set()}")
-                        # CRITICAL: Stop the old producer to prevent "zombie" tasks
-                        pipeline.stop_event.set()
-                        pipeline = None  # Trigger creation logic below
-                    else:
-                        # Reuse existing - either exact match or small forward seek
-                        pipeline.ref_count += 1
-                        if offset_diff_abs > 0:
-                            LOGGER.info(
-                                f"Stream {stream_id[:8]}: SMALL_FORWARD_SEEK "
-                                f"(+{offset_diff / (1024*1024):.1f}MB, <50 chunks), keeping pipeline (ref={pipeline.ref_count})"
-                            )
-                        else:
-                            LOGGER.info(f"Stream {stream_id[:8]}: Reusing pipeline (ref={pipeline.ref_count})")
-                        
-                        # Cancel any pending delayed cleanup
-                        if pipeline.delayed_cleanup_task and not pipeline.delayed_cleanup_task.done():
-                             LOGGER.debug(f"Stream {stream_id[:8]}: Cancelling delayed cleanup (active reuse)")
-                             pipeline.delayed_cleanup_task.cancel()
-                             pipeline.delayed_cleanup_task = None
-                else:
-                    # Create new
-                    is_pipeline_creator = True
-                    
-
-
-            if not pipeline:
+                # We do NOT check STREAM_PIPELINES for reuse anymore to prevent
+                # multiple consumers stealing chunks from the same queue.
+                
                 # Create new pipeline
                 is_pipeline_creator = True
                 
@@ -920,10 +869,12 @@ class ByteStreamer:
                 )
                 pipeline.ref_count = 1
                 
-                # Register in ACTIVE_STREAMS
+                # Register in ACTIVE_STREAMS (for stats)
+                # Use pipeline_id so dashboard shows all active connections
                 now = time.time()
-                ACTIVE_STREAMS[stream_id] = {
-                    "stream_id": stream_id,
+                ACTIVE_STREAMS[pipeline_id] = {
+                    "stream_id": stream_id, # Original ID for reference
+                    "pipeline_id": pipeline_id,
                     "msg_id": getattr(file_id, "local_id", None),
                     "chat_id": getattr(file_id, "chat_id", None),
                     "dc_id": file_id.dc_id,
@@ -942,18 +893,13 @@ class ByteStreamer:
                     "meta": meta or {},
                 }
                 
-                # Sanitize previous entries if overwriting
-                if stream_id in STREAM_PIPELINES:
-                    prev = STREAM_PIPELINES[stream_id]
-                    LOGGER.info(f"Stream {stream_id[:8]}: Replacing stalling pipeline (ref={prev.ref_count})")
-                
                 # Increment workloads ONCE
                 work_loads[client_index] += 1
                 for idx in additional_client_indices:
                     work_loads[idx] += 1
                 
-                STREAM_PIPELINES[stream_id] = pipeline
-                LOGGER.info(f"Stream {stream_id[:8]}: NEW pipeline (bots={pipeline.all_client_indices()}, offset={offset})")
+                STREAM_PIPELINES[pipeline_id] = pipeline
+                LOGGER.info(f"Stream {stream_id[:8]} (Pipe {pipeline_id}): NEW pipeline (bots={pipeline.all_client_indices()}, offset={offset})")
         
             # === PHASE 2: Pre-warm Sessions (Creator Only) ===
             if is_pipeline_creator:
@@ -984,7 +930,7 @@ class ByteStreamer:
             # === PHASE 3: Consume (All Requests) ===
             async for chunk in _consumer_generator(
                 pipeline, request, first_part_cut, last_part_cut,
-                part_count, stream_id, is_pipeline_creator
+                part_count, pipeline_id, is_pipeline_creator
             ):
                 yield chunk
         
@@ -993,7 +939,7 @@ class ByteStreamer:
             if pipeline:
                 async with PIPELINE_LOCK:
                     pipeline.ref_count -= 1
-                    LOGGER.debug(f"Stream {stream_id[:8]}: Exit (ref={pipeline.ref_count})")
+                    LOGGER.debug(f"Stream {stream_id[:8]} (Pipe {pipeline_id}): Exit (ref={pipeline.ref_count})")
                     
                     if pipeline.ref_count <= 0:
                         # Enhancement 2: Prevent race condition - check if cleanup already scheduled
@@ -1005,8 +951,8 @@ class ByteStreamer:
                                 cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 30)
                             except:
                                 cleanup_delay = 30
-                            LOGGER.info(f"Stream {stream_id[:8]}: Starting delayed cleanup ({cleanup_delay}s)")
-                            pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(stream_id, pipeline))
+                            LOGGER.info(f"Stream {stream_id[:8]} (Pipe {pipeline_id}): Starting delayed cleanup ({cleanup_delay}s)")
+                            pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(pipeline_id, pipeline))
 
     async def _delayed_cleanup(self, stream_id: str, pipeline: StreamPipeline):
         # Enhancement 14: Configurable cleanup delay
