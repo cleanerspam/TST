@@ -6,7 +6,7 @@ from typing import Dict, Union, Optional, Tuple, List
 import traceback
 from fastapi import Request
 from pyrogram import Client, raw, utils
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, FileReferenceExpired
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.session import Session, Auth
 from Backend.logger import LOGGER
@@ -73,6 +73,7 @@ class StreamPipeline:
         self.producer_task: Optional[asyncio.Task] = None
         self.ref_count = 0
         self.error: Optional[Exception] = None
+        self.delayed_cleanup_task: Optional[asyncio.Task] = None
         
     def all_client_indices(self) -> List[int]:
         """Returns all bot indices (primary + helpers)"""
@@ -135,7 +136,12 @@ async def _producer_task(
     part_count: int,
     chunk_size: int,
     parallelism: int,
-    stream_id: str
+    chunk_size: int,
+    parallelism: int,
+    stream_id: str,
+    byte_streamer = None,
+    chat_id: int = 0,
+    message_id: int = 0
 ):
     """
     Producer task - fetches chunks and puts them in queue.
@@ -189,6 +195,19 @@ async def _producer_task(
                         LOGGER.debug(f"Stream {stream_id[:8]}: Chunk {seq_idx} by Bot{session_name}")
                 
                 return seq_idx, chunk_bytes
+            except FileReferenceExpired:
+                LOGGER.warning(f"Stream {stream_id[:8]}: FileReferenceExpired detected, refreshing...")
+                try:
+                    if byte_streamer:
+                         new_file_id = await byte_streamer.get_file_properties(chat_id, message_id, force_refresh=True)
+                         # Update location for future requests in this producer
+                         # Note: 'location' is a local variable in _producer_task, so this updates it for the loop
+                         location = await byte_streamer._get_location(new_file_id)
+                         tries = 0 # Reset tries to give the new reference a chance
+                         continue
+                except Exception as refresh_exc:
+                     LOGGER.error(f"Stream {stream_id[:8]}: Failed to refresh file reference: {refresh_exc}")
+                     tries += 1
             except Exception as e:
                 tries += 1
                 LOGGER.warning(f"Chunk {seq_idx} error from Bot{getattr(session, 'client', session).name if hasattr(getattr(session, 'client', session), 'name') else '?'} (try {tries}/{max_retries}): {type(e).__name__}: {e}")
@@ -450,8 +469,8 @@ class ByteStreamer:
                 LOGGER.warning(f"Could not pre-warm DC {dc}: {e}")
                 continue
 
-    async def get_file_properties(self, chat_id: int, message_id: int) -> FileId:
-        if message_id not in self._file_id_cache:
+    async def get_file_properties(self, chat_id: int, message_id: int, force_refresh: bool = False) -> FileId:
+        if force_refresh or message_id not in self._file_id_cache:
             file_id = await get_file_ids(self.client, int(chat_id), int(message_id))
             if not file_id:
                 LOGGER.warning("Message %s not found", message_id)
@@ -504,6 +523,12 @@ class ByteStreamer:
                         # Reuse existing
                         pipeline.ref_count += 1
                         LOGGER.info(f"Stream {stream_id[:8]}: Reusing pipeline (ref={pipeline.ref_count})")
+                        
+                        # Cancel any pending delayed cleanup
+                        if pipeline.delayed_cleanup_task and not pipeline.delayed_cleanup_task.done():
+                             LOGGER.debug(f"Stream {stream_id[:8]}: Cancelling delayed cleanup (active reuse)")
+                             pipeline.delayed_cleanup_task.cancel()
+                             pipeline.delayed_cleanup_task = None
                 else:
                     # Create new
                     is_pipeline_creator = True
@@ -575,7 +600,8 @@ class ByteStreamer:
                 pipeline.producer_task = asyncio.create_task(
                     _producer_task(
                         pipeline, file_id, session_pool, location,
-                        offset, part_count, chunk_size, parallelism, stream_id
+                        offset, part_count, chunk_size, parallelism, stream_id,
+                        byte_streamer=self, chat_id=file_id.chat_id, message_id=file_id.local_id
                     )
                 )
             
@@ -594,42 +620,63 @@ class ByteStreamer:
                     LOGGER.debug(f"Stream {stream_id[:8]}: Exit (ref={pipeline.ref_count})")
                     
                     if pipeline.ref_count <= 0:
-                        # Last consumer
-                        LOGGER.info(f"Stream {stream_id[:8]}: Last consumer - cleanup")
-                        
-                        pipeline.stop_event.set()
-                        
-                        if pipeline.producer_task and not pipeline.producer_task.done():
-                            pipeline.producer_task.cancel()
-                            try:
-                                await asyncio.wait_for(pipeline.producer_task, timeout=2.0)
-                            except:
-                                pass
-                        
-                        # Decrement workloads (last consumer cleans up)
+                        # Start delayed cleanup instead of immediate
+                        if not pipeline.delayed_cleanup_task or pipeline.delayed_cleanup_task.done():
+                             pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(stream_id, pipeline))
+
+    async def _delayed_cleanup(self, stream_id: str, pipeline: StreamPipeline):
+        LOGGER.info(f"Stream {stream_id[:8]}: Starting delayed cleanup (10s)")
+        try:
+            await asyncio.sleep(10)
+            
+            async with PIPELINE_LOCK:
+                # Check if still valid for cleanup (might have been reused during sleep)
+                if pipeline.ref_count <= 0:
+                    LOGGER.info(f"Stream {stream_id[:8]}: Performing final cleanup")
+                    
+                    pipeline.stop_event.set()
+                    
+                    if pipeline.producer_task and not pipeline.producer_task.done():
+                        pipeline.producer_task.cancel()
                         try:
-                            work_loads[pipeline.client_index] -= 1
-                            for idx in pipeline.additional_client_indices:
-                                if idx in work_loads and work_loads[idx] > 0:
-                                    work_loads[idx] -= 1
+                            await asyncio.wait_for(pipeline.producer_task, timeout=2.0)
                         except:
                             pass
-                        
-                        # Move to RECENT_STREAMS
-                        if stream_id in ACTIVE_STREAMS:
-                            try:
-                                entry = ACTIVE_STREAMS[stream_id]
-                                end_ts = time.time()
-                                entry.update({
-                                    "end_ts": end_ts,
-                                    "duration": end_ts - entry["start_ts"],
-                                    "status": entry.get("status", "finished"),
-                                })
-                                RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(stream_id))
-                            except:
-                                pass
-                        
-                        STREAM_PIPELINES.pop(stream_id, None)
+                    
+                    # Decrement workloads (last consumer cleans up)
+                    try:
+                        work_loads[pipeline.client_index] -= 1
+                        for idx in pipeline.additional_client_indices:
+                            if idx in work_loads and work_loads[idx] > 0:
+                                work_loads[idx] -= 1
+                    except:
+                        pass
+                    
+                    # Move to RECENT_STREAMS
+                    if stream_id in ACTIVE_STREAMS:
+                        try:
+                            entry = ACTIVE_STREAMS[stream_id]
+                            end_ts = time.time()
+                            entry.update({
+                                "end_ts": end_ts,
+                                "duration": end_ts - entry["start_ts"],
+                                "status": entry.get("status", "finished"),
+                            })
+                            RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(stream_id))
+                        except:
+                            pass
+                    
+                    STREAM_PIPELINES.pop(stream_id, None)
+                else:
+                     LOGGER.info(f"Stream {stream_id[:8]}: Cleanup aborted (ref_count={pipeline.ref_count})")
+        
+        except asyncio.CancelledError:
+             LOGGER.debug(f"Stream {stream_id[:8]}: Delayed cleanup cancelled (resurrected)")
+        except Exception as e:
+             LOGGER.error(f"Stream {stream_id[:8]}: Error in delayed cleanup: {e}")
+        finally:
+             if pipeline.delayed_cleanup_task == asyncio.current_task():
+                  pipeline.delayed_cleanup_task = None
 
 
     async def _get_media_session(self, file_id: FileId) -> Session:
