@@ -497,6 +497,8 @@ class ByteStreamer:
                     
                     if offset_diff > valid_reuse_range:
                         LOGGER.info(f"Stream {stream_id[:8]}: SEEK DETECTED (offset {offset} vs start {pipeline.start_offset}). Creating NEW pipeline.")
+                        # CRITICAL: Stop the old producer to prevent "zombie" tasks
+                        pipeline.stop_event.set()
                         pipeline = None # Trigger creation logic below
                     else:
                         # Reuse existing

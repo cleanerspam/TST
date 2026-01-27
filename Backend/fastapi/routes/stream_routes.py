@@ -269,6 +269,7 @@ async def media_streamer(
     headers = {
         "Content-Type": mime_type,
         "Content-Length": str(req_length),
+        "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
         "Content-Disposition": f'inline; filename="{file_name}"',
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=3600, immutable",
