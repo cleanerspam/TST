@@ -541,12 +541,14 @@ class ByteStreamer:
                     offset_diff = abs(offset - pipeline.start_offset)
                     valid_reuse_range = chunk_size * 2
                     
-                    if offset_diff > valid_reuse_range:
-                        LOGGER.info(f"Stream {stream_id[:8]}: SEEK DETECTED (offset {offset} vs start {pipeline.start_offset}). Creating NEW pipeline.")
-                        LOGGER.debug(f"DEBUG: Seek diff: {offset_diff} > {valid_reuse_range}")
+                    if offset_diff > valid_reuse_range or pipeline.stop_event.is_set():
+                        reason = "SEEK" if offset_diff > valid_reuse_range else "STOPPED_EVENT"
+                        LOGGER.info(f"Stream {stream_id[:8]}: {reason} DETECTED (offset {offset} vs start {pipeline.start_offset}). Creating NEW pipeline.")
+                        LOGGER.debug(f"DEBUG: Reuse check: diff={offset_diff} stop={pipeline.stop_event.is_set()}")
                         # CRITICAL: Stop the old producer to prevent "zombie" tasks
                         pipeline.stop_event.set()
                         pipeline = None # Trigger creation logic below
+                        # Should we pop? logic below overwrites, so it's fine.
                     else:
                         # Reuse existing
                         pipeline.ref_count += 1
