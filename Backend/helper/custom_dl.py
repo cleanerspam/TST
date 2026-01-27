@@ -151,6 +151,7 @@ async def _producer_task(
     
     async def fetch_chunk(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
         """Fetch single chunk with retry logic"""
+        nonlocal location
         # Check cache first
         cache_key = f"{file_id.dc_id}:{getattr(file_id, 'volume_id', 0)}:{getattr(file_id, 'local_id', 0)}:{off}"
         cached = await GLOBAL_CACHE.get(cache_key)
