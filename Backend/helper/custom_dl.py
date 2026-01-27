@@ -57,6 +57,321 @@ class ChunkCache:
 
 GLOBAL_CACHE = ChunkCache(max_size_mb=500)
 
+
+class StreamPipeline:
+    """Manages a shared streaming pipeline for a file.
+    
+    Multiple concurrent HTTP requests for the same file share the same pipeline,
+    ensuring consistent bot selection, shared queue, and proper resource management.
+    """
+    def __init__(self, stream_id: str, queue: asyncio.Queue, stop_event: asyncio.Event,
+                 client_index: int, additional_client_indices: List[int]):
+        self.stream_id = stream_id
+        self.queue = queue
+        self.stop_event = stop_event
+        self.client_index = client_index
+        self.additional_client_indices = additional_client_indices
+        self.ref_count = 0
+        self.producer_task: Optional[asyncio.Task] = None
+        self.error: Optional[Exception] = None
+        self.created_at = time.time()
+        
+    def all_client_indices(self) -> List[int]:
+        """Returns all bot indices (primary + helpers)"""
+        return [self.client_index] + self.additional_client_indices
+
+
+# Global registry of active streaming pipelines
+STREAM_PIPELINES: Dict[str, StreamPipeline] = {}
+PIPELINE_LOCK = asyncio.Lock()
+
+
+async def _ensure_sessions_ready(
+    primary_session,
+    file_id: FileId,
+    additional_client_indices: List[int],
+    stream_id: str,
+    max_wait: float = 10.0
+) -> List:
+    """
+    Ensures all bot sessions are pre-warmed before starting producer.
+    This is CRITICAL for achieving 3x speed from chunk 0.
+    
+    Returns: List of ready sessions [primary, helper1, helper2, ...]
+    """
+    session_pool = [primary_session]
+    
+    for idx in additional_client_indices:
+        try:
+            cli = multi_clients[idx]
+            
+            # Ensure ByteStreamer exists
+            from Backend.fastapi.routes.stream_routes import class_cache
+            if cli not in class_cache:
+                class_cache[cli] = ByteStreamer(cli)
+            
+            # BLOCKING wait for session
+            wait_interval = 0.1
+            waited = 0
+            while waited < max_wait:
+                if file_id.dc_id in getattr(cli, "media_sessions", {}):
+                    session_pool.append(cli.media_sessions[file_id.dc_id])
+                    LOGGER.debug(f"Stream {stream_id[:8]}: Bot{idx} session ready ({waited:.1f}s)")
+                    break
+                await asyncio.sleep(wait_interval)
+                waited += wait_interval
+            else:
+                LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} timeout after {max_wait}s")
+        except Exception as e:
+            LOGGER.warning(f"Stream {stream_id[:8]}: Bot{idx} failed: {e}")
+    
+    return session_pool
+
+
+async def _producer_task(
+    pipeline: StreamPipeline,
+    file_id: FileId,
+    session_pool: List,
+    location,
+    offset: int,
+    part_count: int,
+    chunk_size: int,
+    parallelism: int,
+    stream_id: str
+):
+    """
+    Producer task - fetches chunks and puts them in queue.
+    Only ONE instance per file, shared by all consumers.
+    """
+    q = pipeline.queue
+    stop_event = pipeline.stop_event
+    inflight_tracker = {id(s): 0 for s in session_pool}
+    
+    async def fetch_chunk(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
+        """Fetch single chunk with retry logic"""
+        # Check cache first
+        cache_key = f"{file_id.dc_id}:{getattr(file_id, 'volume_id', 0)}:{getattr(file_id, 'local_id', 0)}:{off}"
+        cached = await GLOBAL_CACHE.get(cache_key)
+        if cached:
+            return seq_idx, cached
+        
+        tries = 0
+        max_retries = 10
+        
+        while tries < max_retries and not stop_event.is_set():
+            # Least-loaded session selection
+            session = min(session_pool, key=lambda s: inflight_tracker.get(id(s), 0))
+            inflight_tracker[id(session)] += 1
+            
+            try:
+                r = await session.send(
+                    raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
+                )
+                chunk_bytes = getattr(r, "bytes", None) if r else None
+                
+                if chunk_bytes:
+                    await GLOBAL_CACHE.set(cache_key, chunk_bytes)
+                    
+                    # Log every 10th chunk for debugging
+                    if seq_idx % 10 == 0:
+                        session_idx = session_pool.index(session) if session in session_pool else -1
+                        LOGGER.debug(f"Stream {stream_id[:8]}: Chunk {seq_idx} by session {session_idx}")
+                
+                return seq_idx, chunk_bytes
+            except Exception as e:
+                tries += 1
+                if "RPCError" in str(e):
+                    LOGGER.warning(f"Chunk {seq_idx} error (try {tries}/{max_retries}): {getattr(e, 'NAME', e)}")
+                await asyncio.sleep(0.15 * tries)
+            finally:
+                if id(session) in inflight_tracker:
+                    inflight_tracker[id(session)] -= 1
+        
+        LOGGER.error(f"Failed chunk {seq_idx} after {max_retries} retries")
+        return seq_idx, None
+    
+    try:
+        if part_count <= 0:
+            await q.put((None, None))
+            return
+        
+        # Parallel fetching with buffer
+        next_to_schedule = 0
+        scheduled_tasks = {}
+        results_buffer = {}
+        next_to_put = 0
+        max_parallel = max(1, parallelism)
+        
+        # Schedule initial batch
+        for i in range(min(part_count, max_parallel)):
+            seq = next_to_schedule
+            off = offset + seq * chunk_size
+            task = asyncio.create_task(fetch_chunk(seq, off))
+            scheduled_tasks[seq] = task
+            next_to_schedule += 1
+        
+        # Main fetch loop
+        while next_to_put < part_count:
+            if stop_event.is_set():
+                break
+            
+            if not scheduled_tasks:
+                break
+            
+            done, _ = await asyncio.wait(scheduled_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
+            
+            for completed in done:
+                completed_seq = None
+                for k, t in list(scheduled_tasks.items()):
+                    if t is completed:
+                        completed_seq = k
+                        break
+                
+                if completed_seq is None:
+                    continue
+                
+                seq_idx, chunk_bytes = completed.result()
+                scheduled_tasks.pop(completed_seq, None)
+                
+                if chunk_bytes is None:
+                    LOGGER.error(f"Empty chunk {seq_idx} - aborting stream")
+                    pipeline.error = Exception("Chunk fetch failed")
+                    await q.put((None, None))
+                    return
+                
+                results_buffer[seq_idx] = chunk_bytes
+                
+                # Schedule next chunk
+                if next_to_schedule < part_count:
+                    seq = next_to_schedule
+                    off = offset + seq * chunk_size
+                    task = asyncio.create_task(fetch_chunk(seq, off))
+                    scheduled_tasks[seq] = task
+                    next_to_schedule += 1
+            
+            # Put sequential chunks in queue
+            while next_to_put in results_buffer:
+                chunk_bytes = results_buffer.pop(next_to_put)
+                await q.put((offset + next_to_put * chunk_size, chunk_bytes))
+                next_to_put += 1
+        
+        await q.put((None, None))
+    
+    except asyncio.CancelledError:
+        LOGGER.debug(f"Producer cancelled for {stream_id[:8]}")
+        try:
+            await q.put((None, None))
+        except:
+            pass
+        raise
+    except Exception as e:
+        LOGGER.exception(f"Producer error for {stream_id[:8]}: {e}")
+        pipeline.error = e
+        try:
+            await q.put((None, None))
+        except:
+            pass
+
+
+async def _consumer_generator(
+    pipeline: StreamPipeline,
+    request: Optional[Request],
+    first_part_cut: int,
+    last_part_cut: int,
+    part_count: int,
+    stream_id: str,
+    should_update_stats: bool
+):
+    """
+    Consumer generator - reads from shared queue and yields chunks.
+    Multiple instances can exist (one per HTTP request).
+    Only the creator updates ACTIVE_STREAMS stats.
+    """
+    q = pipeline.queue
+    current_part_idx = 1
+    
+    try:
+        while True:
+            # Check disconnection
+            try:
+                if request and await request.is_disconnected():
+                    LOGGER.debug(f"Client disconnected for {stream_id[:8]}")
+                    if should_update_stats and stream_id in ACTIVE_STREAMS:
+                        ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
+                    break
+            except:
+                pass
+            
+            # Get chunk from queue
+            off_chunk = await q.get()
+            if off_chunk is None or off_chunk == (None, None):
+                break
+            
+            off, chunk = off_chunk
+            if off is None and chunk is None:
+                break
+            
+            # Update stats (only pipeline creator)
+            if should_update_stats and stream_id in ACTIVE_STREAMS:
+                try:
+                    entry = ACTIVE_STREAMS[stream_id]
+                    chunk_len = len(chunk) if chunk else 0
+                    now_ts = time.time()
+                    
+                    elapsed = now_ts - entry["last_ts"]
+                    if elapsed <= 0:
+                        elapsed = 1e-6
+                    
+                    recent = entry["recent_measurements"]
+                    recent.append((chunk_len, elapsed))
+                    
+                    if len(recent) >= 2:
+                        total_bytes = sum(b for b, _ in recent)
+                        total_time = sum(t for _, t in recent)
+                        instant_mbps = min((total_bytes / (1024 * 1024)) / max(total_time, 0.01), 1000.0)
+                    else:
+                        instant_mbps = 0.0
+                    
+                    entry["total_bytes"] += chunk_len
+                    entry["last_ts"] = now_ts
+                    
+                    total_time = now_ts - entry["start_ts"]
+                    if total_time <= 0:
+                        total_time = 1e-6
+                    
+                    entry["avg_mbps"] = (entry["total_bytes"] / (1024 * 1024)) / total_time
+                    entry["instant_mbps"] = instant_mbps
+                    
+                    if instant_mbps > entry["peak_mbps"]:
+                        entry["peak_mbps"] = instant_mbps
+                except Exception as e:
+                    LOGGER.warning(f"Stat update error: {e}")
+            
+            # Yield chunk with appropriate cuts
+            if part_count == 1:
+                yield chunk[first_part_cut:last_part_cut]
+            elif current_part_idx == 1:
+                yield chunk[first_part_cut:]
+            elif current_part_idx == part_count:
+                yield chunk[:last_part_cut]
+            else:
+                yield chunk
+            
+            current_part_idx += 1
+    
+    except asyncio.CancelledError:
+        LOGGER.debug(f"Consumer cancelled for {stream_id[:8]}")
+        if should_update_stats and stream_id in ACTIVE_STREAMS:
+            ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
+        raise
+    except Exception as e:
+        LOGGER.exception(f"Consumer error for {stream_id[:8]}: {e}")
+        if should_update_stats and stream_id in ACTIVE_STREAMS:
+            ACTIVE_STREAMS[stream_id]["status"] = "error"
+        raise
+
+
+
 class ByteStreamer:
     CHUNK_SIZE = 1024 * 1024  # 1 MB
     CLEAN_INTERVAL = 30 * 60  # 30 minutes
@@ -145,337 +460,147 @@ class ByteStreamer:
         request: Optional[Request] = None,
         additional_client_indices: List[int] = [],
     ):
+        """
+        Streaming with Global Pipeline Manager.
+        
+        Same stream_id → Same pipeline → Same bots → Same queue
+        """
         if not stream_id:
             stream_id = secrets.token_hex(8)
-
-        now = time.time()
-        registry_entry = {
-            "stream_id": stream_id,
-            "msg_id": getattr(file_id, "local_id", None) or None,
-            "chat_id": getattr(file_id, "chat_id", None),
-            "dc_id": file_id.dc_id,
-            "client_index": client_index,
-            "additional_indices": additional_client_indices,
-            "start_ts": now,
-            "last_ts": now,
-            "total_bytes": 0,
-            "avg_mbps": 0.0,
-            "instant_mbps": 0.0,
-            "peak_mbps": 0.0,
-            "recent_measurements": deque(maxlen=5),
-            "status": "active",
-            "part_count": part_count,
-            "prefetch": prefetch,
-            "meta": meta or {},
-        }
-
-        # Only register and increment workloads if this is a NEW stream
-        # Multiple concurrent HTTP requests for the same file will have the same stream_id
-        is_new_stream = stream_id not in ACTIVE_STREAMS
         
-        if is_new_stream:
-            ACTIVE_STREAMS[stream_id] = registry_entry
-            work_loads[client_index] += 1
-            for idx in additional_client_indices:
-                 work_loads[idx] += 1
-
+        pipeline = None
+        is_pipeline_creator = False
+        
         try:
-            queue_maxsize = max(1, prefetch)
-            q: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
-            stop_event = asyncio.Event()
-
-            media_session = await self._get_media_session(file_id)
-            location = await self._get_location(file_id)
-            
-            # Build Session Pool
-            session_pool = [media_session]
-            for idx in additional_client_indices:
-                try:
-                    cli = multi_clients[idx]
-                    # Only usage helper if session exists (no blocking pre-warm here)
-                    if file_id.dc_id in getattr(cli, "media_sessions", {}):
-                         session_pool.append(cli.media_sessions[file_id.dc_id])
-                except Exception:
-                    pass
-            
-            # Debug: Log session pool details
-            LOGGER.info(f"Stream {stream_id[:8]}: Built session pool with {len(session_pool)} sessions for DC{file_id.dc_id}")
-            if len(session_pool) < len(additional_client_indices) + 1:
-                LOGGER.warning(f"Stream {stream_id[:8]}: Only {len(session_pool)}/{len(additional_client_indices)+1} sessions ready (some helpers not pre-warmed yet)")
-            
-            LOGGER.debug(f"Stream {stream_id}: Using {len(session_pool)} sessions for DC {file_id.dc_id}")
-
-            # Load Balancing: Track pending requests per session
-            # using object id as key
-            inflight_tracker = {id(s): 0 for s in session_pool}
-            
-            async def fetch_chunk_with_retries(seq_idx: int, off: int) -> Tuple[int, Optional[bytes]]:
-                # 1. Check Cache First
-                cache_key = f"{file_id.dc_id}:{getattr(file_id, 'volume_id', 0)}:{getattr(file_id, 'local_id', 0)}:{off}"
-                cached_data = await GLOBAL_CACHE.get(cache_key)
-                if cached_data:
-                    return seq_idx, cached_data
-
-                tries = 0
-                max_retries = 10
-                last_error = None
-                
-                while tries < max_retries and not stop_event.is_set():
-                    # Smart Selection: Pick session with least pending requests
-                    # If retrying, this naturally might pick a different session if the original one is stuck/loaded
-                    session = min(session_pool, key=lambda s: inflight_tracker.get(id(s), 0))
-                    inflight_tracker[id(session)] += 1
+            # === PHASE 1: Get or Create Pipeline ===
+            async with PIPELINE_LOCK:
+                if stream_id in STREAM_PIPELINES:
+                    # Reuse existing
+                    pipeline = STREAM_PIPELINES[stream_id]
+                    pipeline.ref_count += 1
+                    LOGGER.info(f"Stream {stream_id[:8]}: Reusing pipeline (ref={pipeline.ref_count})")
+                else:
+                    # Create new
+                    is_pipeline_creator = True
                     
-                    try:
-                        r = await session.send(
-                            raw.functions.upload.GetFile(location=location, offset=off, limit=chunk_size)
-                        )
-                        chunk_bytes = getattr(r, "bytes", None) if r else None
-                        
-                        # 2. Store in Cache
-                        if chunk_bytes:
-                            await GLOBAL_CACHE.set(cache_key, chunk_bytes)
-                            
-                        return seq_idx, chunk_bytes
-                    except Exception as e:
-                        tries += 1
-                        last_error = e
-                        wait_time = 0.15 * tries 
-                        
-                        if "RPCError" in str(e): 
-                             LOGGER.warning(
-                                "Fetch chunk error seq=%s off=%s try=%s/%s err=%s. Retrying on new session...",
-                                seq_idx, off, tries, max_retries, getattr(e, "NAME", e)
-                            )
-                        await asyncio.sleep(wait_time)
-                    finally:
-                        # Release load count
-                        if id(session) in inflight_tracker:
-                            inflight_tracker[id(session)] -= 1
+                    q = asyncio.Queue(maxsize=max(1, prefetch))
+                    stop_event = asyncio.Event()
+                    
+                    pipeline = StreamPipeline(
+                        stream_id=stream_id,
+                        queue=q,
+                        stop_event=stop_event,
+                        client_index=client_index,
+                        additional_client_indices=additional_client_indices
+                    )
+                    pipeline.ref_count = 1
+                    
+                    # Register in ACTIVE_STREAMS
+                    now = time.time()
+                    ACTIVE_STREAMS[stream_id] = {
+                        "stream_id": stream_id,
+                        "msg_id": getattr(file_id, "local_id", None),
+                        "chat_id": getattr(file_id, "chat_id", None),
+                        "dc_id": file_id.dc_id,
+                        "client_index": client_index,
+                        "additional_indices": additional_client_indices,
+                        "start_ts": now,
+                        "last_ts": now,
+                        "total_bytes": 0,
+                        "avg_mbps": 0.0,
+                        "instant_mbps": 0.0,
+                        "peak_mbps": 0.0,
+                        "recent_measurements": deque(maxlen=5),
+                        "status": "active",
+                        "part_count": part_count,
+                        "prefetch": prefetch,
+                        "meta": meta or {},
+                    }
+                    
+                    # Increment workloads ONCE
+                    work_loads[client_index] += 1
+                    for idx in additional_client_indices:
+                        work_loads[idx] += 1
+                    
+                    STREAM_PIPELINES[stream_id] = pipeline
+                    LOGGER.info(f"Stream {stream_id[:8]}: NEW pipeline (bots={pipeline.all_client_indices()})")
+            
+            # === PHASE 2: Pre-warm Sessions (Creator Only) ===
+            if is_pipeline_creator:
+                media_session = await self._get_media_session(file_id)
+                location = await self._get_location(file_id)
                 
-                LOGGER.error("Failed to fetch chunk seq=%s off=%s after %s retries. Last error: %s", 
-                            seq_idx, off, max_retries, last_error)
-                return seq_idx, None
-
-            async def producer():
-                try:
-                    if part_count <= 0:
-                        await q.put((None, None))
-                        return
-
-                    next_to_schedule = 0
-                    scheduled_tasks = {}
-                    results_buffer = {}
-                    next_to_put = 0
-                    max_parallel = max(1, parallelism)
-
-                    initial = min(part_count, max_parallel)
-                    for i in range(initial):
-                        seq = next_to_schedule
-                        off = offset + seq * chunk_size
-                        task = asyncio.create_task(fetch_chunk_with_retries(seq, off))
-                        scheduled_tasks[seq] = task
-                        next_to_schedule += 1
-
-                    while next_to_put < part_count:
-                        if stop_event.is_set():
-                            break
-
-                        if not scheduled_tasks:
-                            seq = next_to_schedule
-                            off = offset + seq * chunk_size
-                            task = asyncio.create_task(fetch_chunk_with_retries(seq, off))
-                            scheduled_tasks[seq] = task
-                            next_to_schedule += 1
-
-                        done, _ = await asyncio.wait(scheduled_tasks.values(), return_when=asyncio.FIRST_COMPLETED)
-
-                        for completed in done:
+                # BLOCKING session pre-warming
+                session_pool = await _ensure_sessions_ready(
+                    media_session,
+                    file_id,
+                    additional_client_indices,
+                    stream_id,
+                    max_wait=10.0
+                )
+                
+                LOGGER.info(f"Stream {stream_id[:8]}: {len(session_pool)}/{len(additional_client_indices)+1} sessions ready!")
+                
+                # START producer
+                pipeline.producer_task = asyncio.create_task(
+                    _producer_task(
+                        pipeline, file_id, session_pool, location,
+                        offset, part_count, chunk_size, parallelism, stream_id
+                    )
+                )
+            
+            # === PHASE 3: Consume (All Requests) ===
+            async for chunk in _consumer_generator(
+                pipeline, request, first_part_cut, last_part_cut,
+                part_count, stream_id, is_pipeline_creator
+            ):
+                yield chunk
+        
+        finally:
+            # === PHASE 4: Cleanup ===
+            if pipeline:
+                async with PIPELINE_LOCK:
+                    pipeline.ref_count -= 1
+                    LOGGER.debug(f"Stream {stream_id[:8]}: Exit (ref={pipeline.ref_count})")
+                    
+                    if pipeline.ref_count <= 0:
+                        # Last consumer
+                        LOGGER.info(f"Stream {stream_id[:8]}: Last consumer - cleanup")
+                        
+                        pipeline.stop_event.set()
+                        
+                        if pipeline.producer_task and not pipeline.producer_task.done():
+                            pipeline.producer_task.cancel()
                             try:
-                                completed_seq = None
-                                for k, t in list(scheduled_tasks.items()):
-                                    if t is completed:
-                                        completed_seq = k
-                                        break
-
-                                if completed_seq is None:
-                                    continue
-
-                                seq_idx, chunk_bytes = completed.result()
-                                scheduled_tasks.pop(completed_seq, None)
-
-                                if chunk_bytes is None:
-                                    LOGGER.error("Chunk fetch returned empty for stream=%s seq=%s", stream_id, seq_idx)
-                                    await q.put((None, None))
-                                    return
-
-                                results_buffer[seq_idx] = chunk_bytes
-
-                                if next_to_schedule < part_count:
-                                    seq = next_to_schedule
-                                    off = offset + seq * chunk_size
-                                    task = asyncio.create_task(fetch_chunk_with_retries(seq, off))
-                                    scheduled_tasks[seq] = task
-                                    next_to_schedule += 1
-
-                            except asyncio.CancelledError:
-                                raise
-                            except Exception as e:
-                                LOGGER.exception("Error processing completed fetch task: %s", e)
-                                await q.put((None, None))
-                                return
-
-                        while next_to_put in results_buffer:
-                            chunk_bytes = results_buffer.pop(next_to_put)
-                            await q.put((offset + next_to_put * chunk_size, chunk_bytes))
-                            next_to_put += 1
-
-                    await q.put((None, None))
-
-                except asyncio.CancelledError:
-                    LOGGER.debug("Producer cancelled for stream %s", stream_id)
-                    try:
-                        await q.put((None, None))
-                    except Exception:
-                        pass
-                    raise
-                except Exception as e:
-                    LOGGER.exception("Producer unexpected error for stream %s: %s", stream_id, e)
-                    try:
-                        await q.put((None, None))
-                    except Exception:
-                        pass
-
-        except Exception:
-            if is_new_stream:
-                work_loads[client_index] -= 1
-                for idx in additional_client_indices:
-                    if idx in work_loads and work_loads[idx] > 0:
-                        work_loads[idx] -= 1
-            if stream_id in ACTIVE_STREAMS:
-                del ACTIVE_STREAMS[stream_id]
-            raise
-
-        async def consumer_generator():
-            producer_task = asyncio.create_task(producer())
-            current_part_idx = 1
-
-            try:
-                while True:
-                    try:
-                        if request and await request.is_disconnected():
-                            LOGGER.debug("Client disconnected for stream %s; cancelling stream", stream_id)
-                            ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
-                            break
-                    except Exception:
-                        pass
-
-                    off_chunk = await q.get()
-                    if off_chunk is None:
-                        break
-
-                    off, chunk = off_chunk
-                    if off is None and chunk is None:
-                        break
-
-                    try:
-                        chunk_len = len(chunk)
-                    except Exception:
-                        chunk_len = 0
-
-                    now_ts = time.time()
-                    elapsed = now_ts - ACTIVE_STREAMS[stream_id]["last_ts"]
-                    if elapsed <= 0:
-                        elapsed = 1e-6
-
-                    recent = ACTIVE_STREAMS[stream_id]["recent_measurements"]
-                    recent.append((chunk_len, elapsed))
-
-                    if len(recent) >= 2:
-                        total_bytes = sum(b for b, _ in recent)
-                        total_time = sum(t for _, t in recent)
-                        instant_mbps = min((total_bytes / (1024 * 1024)) / max(total_time, 0.01), 1000.0)
-                    else:
-                        instant_mbps = 0.0
-
-                    ACTIVE_STREAMS[stream_id]["total_bytes"] += chunk_len
-                    ACTIVE_STREAMS[stream_id]["last_ts"] = now_ts
-
-                    total_time = now_ts - ACTIVE_STREAMS[stream_id]["start_ts"]
-                    if total_time <= 0:
-                        total_time = 1e-6
-
-                    ACTIVE_STREAMS[stream_id]["avg_mbps"] = (ACTIVE_STREAMS[stream_id]["total_bytes"] / (1024 * 1024)) / total_time
-                    ACTIVE_STREAMS[stream_id]["instant_mbps"] = instant_mbps
-
-                    if instant_mbps > ACTIVE_STREAMS[stream_id]["peak_mbps"]:
-                        ACTIVE_STREAMS[stream_id]["peak_mbps"] = instant_mbps
-
-                    if part_count == 1:
-                        yield chunk[first_part_cut:last_part_cut]
-                    elif current_part_idx == 1:
-                        yield chunk[first_part_cut:]
-                    elif current_part_idx == part_count:
-                        yield chunk[:last_part_cut]
-                    else:
-                        yield chunk
-
-                    current_part_idx += 1
-
-            except asyncio.CancelledError:
-                LOGGER.debug("Consumer cancelled for stream %s", stream_id)
-                if not producer_task.done():
-                    producer_task.cancel()
-                ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
-                raise
-            except Exception as e:
-                LOGGER.exception("Consumer error for stream %s: %s", stream_id, e)
-                ACTIVE_STREAMS[stream_id]["status"] = "error"
-                if not producer_task.done():
-                    producer_task.cancel()
-                raise
-            finally:
-                if not producer_task.done():
-                    try:
-                        producer_task.cancel()
-                        await asyncio.wait_for(producer_task, timeout=2.0)
-                    except Exception:
-                        pass
-
-                try:
-                    end_ts = time.time()
-                    total_bytes = ACTIVE_STREAMS[stream_id]["total_bytes"]
-                    start_ts = ACTIVE_STREAMS[stream_id]["start_ts"]
-                    duration = end_ts - start_ts if end_ts > start_ts else 0.0
-                    avg_mbps = (total_bytes / (1024 * 1024)) / (duration if duration > 0 else 1e-6)
-
-                    entry = ACTIVE_STREAMS.get(stream_id, {})
-                    entry.update({
-                        "end_ts": end_ts,
-                        "duration": duration,
-                        "avg_mbps": avg_mbps,
-                        "status": entry.get("status", "finished"),
-                        "parallelism": parallelism,
-                    })
-
-                    try:
-                        RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(stream_id))
-                    except KeyError:
-                        pass
-                finally:
-                    # Only decrement if we were the ones who incremented (is_new_stream)
-                    if is_new_stream:
+                                await asyncio.wait_for(pipeline.producer_task, timeout=2.0)
+                            except:
+                                pass
+                        
+                        # Decrement workloads (last consumer cleans up)
                         try:
-                            work_loads[client_index] -= 1
-                            for idx in additional_client_indices:
-                                 if idx in work_loads and work_loads[idx] > 0:
-                                      work_loads[idx] -= 1
-                        except Exception:
+                            work_loads[pipeline.client_index] -= 1
+                            for idx in pipeline.additional_client_indices:
+                                if idx in work_loads and work_loads[idx] > 0:
+                                    work_loads[idx] -= 1
+                        except:
                             pass
+                        
+                        # Move to RECENT_STREAMS
+                        if stream_id in ACTIVE_STREAMS:
+                            try:
+                                entry = ACTIVE_STREAMS[stream_id]
+                                end_ts = time.time()
+                                entry.update({
+                                    "end_ts": end_ts,
+                                    "duration": end_ts - entry["start_ts"],
+                                    "status": entry.get("status", "finished"),
+                                })
+                                RECENT_STREAMS.appendleft(ACTIVE_STREAMS.pop(stream_id))
+                            except:
+                                pass
+                        
+                        STREAM_PIPELINES.pop(stream_id, None)
 
-                stop_event.set()
-
-        return consumer_generator()
 
     async def _get_media_session(self, file_id: FileId) -> Session:
         dc = file_id.dc_id
