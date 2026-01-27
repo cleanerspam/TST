@@ -498,26 +498,7 @@ class ByteStreamer:
                     # Create new
                     is_pipeline_creator = True
                     
-                    q = asyncio.Queue(maxsize=max(1, prefetch))
-                    stop_event = asyncio.Event()
-                    
-                    pipeline = StreamPipeline(
-                        stream_id=stream_id,
-                        queue=q,
-                        stop_event=stop_event,
-                        client_index=client_index,
-                        additional_client_indices=additional_client_indices
-                    )
-                    pipeline.ref_count = 1
-                    
-                    # Register in ACTIVE_STREAMS
-                    now = time.time()
-                    ACTIVE_STREAMS[stream_id] = {
-                        "stream_id": stream_id,
-                        "msg_id": getattr(file_id, "local_id", None),
-                        "chat_id": getattr(file_id, "chat_id", None),
-                        "dc_id": file_id.dc_id,
-                        "client_index": client_index,
+
 
             if not pipeline:
                 # Create new pipeline
