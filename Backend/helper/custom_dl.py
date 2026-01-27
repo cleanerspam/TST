@@ -535,8 +535,7 @@ class ByteStreamer:
                     media_session,
                     file_id,
                     additional_client_indices,
-                    stream_id,
-                    max_wait=10.0
+                    stream_id
                 )
                 
                 LOGGER.info(f"Stream {stream_id[:8]}: {len(session_pool)}/{len(additional_client_indices)+1} sessions ready!")
