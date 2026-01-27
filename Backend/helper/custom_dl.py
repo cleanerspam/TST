@@ -223,6 +223,10 @@ async def _producer_task(
                 if id(session) in inflight_tracker:
                     inflight_tracker[id(session)] -= 1
         
+        if stop_event.is_set():
+            LOGGER.debug(f"DEBUG: Producer for stream {stream_id[:8]} stopped cleanly.")
+            return seq_idx, None
+
         LOGGER.error(f"Failed chunk {seq_idx} after {max_retries} retries")
         return seq_idx, None
     

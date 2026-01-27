@@ -1,5 +1,5 @@
 import pytz
-from logging import getLogger, FileHandler, StreamHandler, INFO, ERROR, Formatter, basicConfig
+from logging import getLogger, FileHandler, StreamHandler, INFO, ERROR, DEBUG, Formatter, basicConfig
 from datetime import datetime
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -26,6 +26,6 @@ getLogger("fastapi").setLevel(ERROR)
 
 
 LOGGER = getLogger(__name__)
-LOGGER.setLevel(INFO)
+LOGGER.setLevel(DEBUG)
 
 LOGGER.info("Logger initialized with IST timezone.")
