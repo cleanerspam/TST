@@ -385,6 +385,9 @@ async def _producer_task(
             LOGGER.debug(f"DEBUG [{stream_id[:8]}]: seq={seq_idx} off={off} try={tries} session={get_session_name(session)}")
             
             try:
+                # Track download start time for speed measurement (cache miss only)
+                download_start = time.time()
+                
                 # Handle both Client (main bot) and Session (helper) objects
                 async with asyncio.timeout(15) if hasattr(asyncio, "timeout") else asyncio.wait_for(asyncio.sleep(0), 15): # Fallback/Compatibility hack, wait.. direct wait_for is better
                     pass
@@ -404,8 +407,44 @@ async def _producer_task(
                 chunk_bytes = getattr(r, "bytes", None) if r else None
                 
                 if chunk_bytes:
+                    # Calculate actual Telegram download time
+                    download_time = time.time() - download_start
+                    
                     await GLOBAL_CACHE.set(cache_key, chunk_bytes, stream_id=stream_id)
                     circuit_breaker.record_success(cache_key)  # Successfully fetched
+                    
+                    # Update download speed stats (only for actual Telegram downloads)
+                    if stream_id in ACTIVE_STREAMS:
+                        try:
+                            entry = ACTIVE_STREAMS[stream_id]
+                            chunk_len = len(chunk_bytes)
+                            
+                            # Track recent download measurements (not cache hits)
+                            recent = entry.get("recent_downloads", [])
+                            if len(recent) >= 5:  # Keep last 5 downloads
+                                recent.pop(0)
+                            recent.append((chunk_len, download_time))
+                            entry["recent_downloads"] = recent
+                            
+                            # Calculate instant speed from recent downloads
+                            if len(recent) >= 2:
+                                total_bytes = sum(b for b, _ in recent)
+                                total_time = sum(t for _, t in recent)
+                                instant_mbps = (total_bytes / (1024 * 1024)) / max(total_time, 0.01)
+                            else:
+                                instant_mbps = (chunk_len / (1024 * 1024)) / max(download_time, 0.01)
+                            
+                            entry["instant_mbps"] = instant_mbps
+                            if instant_mbps > entry.get("peak_mbps", 0):
+                                entry["peak_mbps"] = instant_mbps
+                                
+                            # Update average based on total downloaded bytes and time
+                            entry["total_download_bytes"] = entry.get("total_download_bytes", 0) + chunk_len
+                            entry["total_download_time"] = entry.get("total_download_time", 0) + download_time
+                            if entry["total_download_time"] > 0:
+                                entry["avg_mbps"] = (entry["total_download_bytes"] / (1024 * 1024)) / entry["total_download_time"]
+                        except Exception as stat_err:
+                            LOGGER.debug(f"Error updating download stats: {stat_err}")
                     
                     if seq_idx == 0:
                          LOGGER.info(f"Stream {stream_id[:8]}: Chunk 0 SUCCEEDED ({len(chunk_bytes)} bytes)")
@@ -682,39 +721,13 @@ async def _consumer_generator(
                 LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Consumer received EOF sentinel")
                 break
             
-            # Update stats (only pipeline creator)
+            # Update stats (only pipeline creator) - now just tracking transfer volume, not speed
             if should_update_stats and pipeline_id in ACTIVE_STREAMS:
                 try:
                     entry = ACTIVE_STREAMS[pipeline_id]
                     chunk_len = len(chunk) if chunk else 0
-                    now_ts = time.time()
-                    
-                    elapsed = now_ts - entry["last_ts"]
-                    if elapsed <= 0:
-                        elapsed = 1e-6
-                    
-                    recent = entry["recent_measurements"]
-                    recent.append((chunk_len, elapsed))
-                    
-                    if len(recent) >= 2:
-                        total_bytes = sum(b for b, _ in recent)
-                        total_time = sum(t for _, t in recent)
-                        instant_mbps = min((total_bytes / (1024 * 1024)) / max(total_time, 0.01), 1000.0)
-                    else:
-                        instant_mbps = 0.0
-                    
                     entry["total_bytes"] += chunk_len
-                    entry["last_ts"] = now_ts
-                    
-                    total_time = now_ts - entry["start_ts"]
-                    if total_time <= 0:
-                        total_time = 1e-6
-                    
-                    entry["avg_mbps"] = (entry["total_bytes"] / (1024 * 1024)) / total_time
-                    entry["instant_mbps"] = instant_mbps
-                    
-                    if instant_mbps > entry["peak_mbps"]:
-                        entry["peak_mbps"] = instant_mbps
+                    entry["last_ts"] = time.time()
                 except Exception as e:
                     LOGGER.warning(f"Stat update error: {e}")
             

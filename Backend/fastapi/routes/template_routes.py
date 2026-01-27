@@ -79,20 +79,21 @@ async def dashboard_page(request: Request, _: bool = Depends(require_auth)):
                     pass
 
         active_streams_data = []
-        for stream_id, info in ACTIVE_STREAMS.items():
-            # Get cache stats
+        for pipeline_id, info in ACTIVE_STREAMS.items():
+            # Get cache stats - use the original stream_id, not pipeline_id
+            original_stream_id = info.get("stream_id", pipeline_id)
             try:
-                cache_stats = GLOBAL_CACHE.get_stream_stats(stream_id)
+                cache_stats = GLOBAL_CACHE.get_stream_stats(original_stream_id)
                 cached_mb = round(cache_stats['cached_mb'], 1)
                 cache_chunks = cache_stats['chunks']
-            except:
+            except Exception as e:
                 cached_mb = 0.0
                 cache_chunks = 0
 
             active_streams_data.append({
                 "cached_mb": cached_mb,
                 "cache_chunks": cache_chunks,
-                "stream_id": stream_id,
+                "stream_id": pipeline_id,
                 "msg_id": info.get("msg_id"),
                 "chat_id": info.get("chat_id"),
                 "status": info.get("status", "active"),
