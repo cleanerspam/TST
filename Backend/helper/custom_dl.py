@@ -530,8 +530,8 @@ async def _producer_task(
             # Enhancement 12: Periodic ref count check - stop if no consumers
             if next_to_put % CHECK_INTERVAL == 0 and next_to_put > 0:
                 async with PIPELINE_LOCK:
-                    if stream_id in STREAM_PIPELINES:
-                        pipeline_ref = STREAM_PIPELINES[stream_id]
+                    if pipeline_id in STREAM_PIPELINES:
+                        pipeline_ref = STREAM_PIPELINES[pipeline_id]
                         if pipeline_ref.ref_count <= 0:
                             LOGGER.info(
                                 f"Stream {stream_id[:8]}: No active consumers "
@@ -640,7 +640,7 @@ async def _consumer_generator(
     first_part_cut: int,
     last_part_cut: int,
     part_count: int,
-    stream_id: str,
+    pipeline_id: str,
     should_update_stats: bool
 ):
     """
@@ -650,16 +650,16 @@ async def _consumer_generator(
     """
     q = pipeline.queue
     current_part_idx = 1
-    LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Consumer started. Request={request is not None}")
+    LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Consumer started. Request={request is not None}")
     
     try:
         while True:
             # Check disconnection
             try:
                 if request and await request.is_disconnected():
-                    LOGGER.debug(f"Client disconnected for {stream_id[:8]}")
-                    if should_update_stats and stream_id in ACTIVE_STREAMS:
-                        ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
+                    LOGGER.debug(f"Client disconnected for pipeline {pipeline_id[-8:]}")
+                    if should_update_stats and pipeline_id in ACTIVE_STREAMS:
+                        ACTIVE_STREAMS[pipeline_id]["status"] = "cancelled"
                     break
             except:
                 pass
@@ -672,13 +672,13 @@ async def _consumer_generator(
             
             off, chunk = off_chunk
             if off is None and chunk is None:
-                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Consumer received EOF sentinel")
+                LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Consumer received EOF sentinel")
                 break
             
             # Update stats (only pipeline creator)
-            if should_update_stats and stream_id in ACTIVE_STREAMS:
+            if should_update_stats and pipeline_id in ACTIVE_STREAMS:
                 try:
-                    entry = ACTIVE_STREAMS[stream_id]
+                    entry = ACTIVE_STREAMS[pipeline_id]
                     chunk_len = len(chunk) if chunk else 0
                     now_ts = time.time()
                     
@@ -724,14 +724,14 @@ async def _consumer_generator(
             current_part_idx += 1
     
     except asyncio.CancelledError:
-        LOGGER.debug(f"Consumer cancelled for {stream_id[:8]}")
-        if should_update_stats and stream_id in ACTIVE_STREAMS:
-            ACTIVE_STREAMS[stream_id]["status"] = "cancelled"
+        LOGGER.debug(f"Consumer cancelled for pipeline {pipeline_id[-8:]}")
+        if should_update_stats and pipeline_id in ACTIVE_STREAMS:
+            ACTIVE_STREAMS[pipeline_id]["status"] = "cancelled"
         raise
     except Exception as e:
-        LOGGER.exception(f"Consumer error for {stream_id[:8]}: {e}")
-        if should_update_stats and stream_id in ACTIVE_STREAMS:
-            ACTIVE_STREAMS[stream_id]["status"] = "error"
+        LOGGER.exception(f"Consumer error for pipeline {pipeline_id[-8:]}: {e}")
+        if should_update_stats and pipeline_id in ACTIVE_STREAMS:
+            ACTIVE_STREAMS[pipeline_id]["status"] = "error"
         raise
 
 
@@ -1004,7 +1004,7 @@ class ByteStreamer:
                             LOGGER.info(f"Stream {stream_id[:8]} (Pipe {pipeline_id}): Starting delayed cleanup ({cleanup_delay}s)")
                             pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(pipeline_id, pipeline))
 
-    async def _delayed_cleanup(self, stream_id: str, pipeline: StreamPipeline):
+    async def _delayed_cleanup(self, pipeline_id: str, pipeline: StreamPipeline):
         # Enhancement 14: Configurable cleanup delay
         try:
             from Backend.config import Telegram
@@ -1012,15 +1012,15 @@ class ByteStreamer:
         except:
             cleanup_delay = 10
         
-        LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Delayed cleanup started (wait={cleanup_delay}s). Current ref_count={pipeline.ref_count}")
+        LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Delayed cleanup started (wait={cleanup_delay}s). Current ref_count={pipeline.ref_count}")
         try:
             await asyncio.sleep(cleanup_delay)
             
             async with PIPELINE_LOCK:
-                LOGGER.debug(f"DEBUG: Stream {stream_id[:8]}: Delayed cleanup woke up. ref_count={pipeline.ref_count}")
+                LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Delayed cleanup woke up. ref_count={pipeline.ref_count}")
                 # Check if still valid for cleanup (might have been reused during sleep)
                 if pipeline.ref_count <= 0:
-                    LOGGER.info(f"Stream {stream_id[:8]}: Performing final cleanup")
+                    LOGGER.info(f"Pipeline {pipeline_id[-8:]}: Performing final cleanup")
                     
                     pipeline.stop_event.set()
                     
@@ -1057,7 +1057,7 @@ class ByteStreamer:
                             
                             # Log lifecycle summary
                             LOGGER.info(
-                                f"Stream {stream_id[:8]} LIFECYCLE: "
+                                f"Pipeline {pipeline_id[-8:]} LIFECYCLE: "
                                 f"duration={duration:.1f}s, "
                                 f"file={entry.get('file_name', '?')[:30]}, "
                                 f"bots={len(entry.get('bots', []))}"
@@ -1080,12 +1080,12 @@ class ByteStreamer:
                     
                     STREAM_PIPELINES.pop(pipeline_id, None)
                 else:
-                     LOGGER.info(f"Stream {stream_id[:8]}: Cleanup aborted (ref_count={pipeline.ref_count})")
+                     LOGGER.info(f"Pipeline {pipeline_id[-8:]}: Cleanup aborted (ref_count={pipeline.ref_count})")
         
         except asyncio.CancelledError:
-             LOGGER.debug(f"Stream {stream_id[:8]}: Delayed cleanup cancelled (resurrected)")
+             LOGGER.debug(f"Pipeline {pipeline_id[-8:]}: Delayed cleanup cancelled (resurrected)")
         except Exception as e:
-             LOGGER.error(f"Stream {stream_id[:8]}: Error in delayed cleanup: {e}")
+             LOGGER.error(f"Pipeline {pipeline_id[-8:]}: Error in delayed cleanup: {e}")
         finally:
              if pipeline.delayed_cleanup_task == asyncio.current_task():
                   pipeline.delayed_cleanup_task = None
