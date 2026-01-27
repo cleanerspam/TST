@@ -64,17 +64,15 @@ class StreamPipeline:
     Multiple concurrent HTTP requests for the same file share the same pipeline,
     ensuring consistent bot selection, shared queue, and proper resource management.
     """
-    def __init__(self, stream_id: str, queue: asyncio.Queue, stop_event: asyncio.Event,
-                 client_index: int, additional_client_indices: List[int]):
-        self.stream_id = stream_id
-        self.queue = queue
-        self.stop_event = stop_event
+    def __init__(self, client_index: int, additional_client_indices: List[int], start_offset: int):
+        self.stop_event = asyncio.Event()
+        self.queue = asyncio.Queue(maxsize=15)
         self.client_index = client_index
         self.additional_client_indices = additional_client_indices
-        self.ref_count = 0
+        self.start_offset = start_offset
         self.producer_task: Optional[asyncio.Task] = None
+        self.ref_count = 0
         self.error: Optional[Exception] = None
-        self.created_at = time.time()
         
     def all_client_indices(self) -> List[int]:
         """Returns all bot indices (primary + helpers)"""
@@ -520,28 +518,54 @@ class ByteStreamer:
                         "chat_id": getattr(file_id, "chat_id", None),
                         "dc_id": file_id.dc_id,
                         "client_index": client_index,
-                        "additional_indices": additional_client_indices,
-                        "start_ts": now,
-                        "last_ts": now,
-                        "total_bytes": 0,
-                        "avg_mbps": 0.0,
-                        "instant_mbps": 0.0,
-                        "peak_mbps": 0.0,
-                        "recent_measurements": deque(maxlen=5),
-                        "status": "active",
-                        "part_count": part_count,
-                        "prefetch": prefetch,
-                        "meta": meta or {},
-                    }
-                    
-                    # Increment workloads ONCE
-                    work_loads[client_index] += 1
-                    for idx in additional_client_indices:
-                        work_loads[idx] += 1
-                    
-                    STREAM_PIPELINES[stream_id] = pipeline
-                    LOGGER.info(f"Stream {stream_id[:8]}: NEW pipeline (bots={pipeline.all_client_indices()})")
-            
+
+            if not pipeline:
+                # Create new pipeline
+                is_pipeline_creator = True
+                
+                pipeline = StreamPipeline(
+                    client_index,
+                    additional_client_indices,
+                    offset
+                )
+                pipeline.ref_count = 1
+                
+                # Register in ACTIVE_STREAMS
+                now = time.time()
+                ACTIVE_STREAMS[stream_id] = {
+                    "stream_id": stream_id,
+                    "msg_id": getattr(file_id, "local_id", None),
+                    "chat_id": getattr(file_id, "chat_id", None),
+                    "dc_id": file_id.dc_id,
+                    "client_index": client_index,
+                    "additional_indices": additional_client_indices,
+                    "start_ts": now,
+                    "last_ts": now,
+                    "total_bytes": 0,
+                    "avg_mbps": 0.0,
+                    "instant_mbps": 0.0,
+                    "peak_mbps": 0.0,
+                    "recent_measurements": deque(maxlen=5),
+                    "status": "active",
+                    "part_count": part_count,
+                    "prefetch": prefetch,
+                    "meta": meta or {},
+                }
+                
+                # Sanitize previous entries if overwriting
+                if stream_id in STREAM_PIPELINES:
+                    prev = STREAM_PIPELINES[stream_id]
+                    LOGGER.info(f"Stream {stream_id[:8]}: Replacing stalling pipeline (ref={prev.ref_count})")
+                
+                # Increment workloads ONCE
+                work_loads[client_index] += 1
+                for idx in additional_client_indices:
+                    work_loads[idx] += 1
+                
+                STREAM_PIPELINES[stream_id] = pipeline
+                LOGGER.info(f"Stream {stream_id[:8]}: NEW pipeline (bots={pipeline.all_client_indices()}, offset={offset})")
+        
+        try:
             # === PHASE 2: Pre-warm Sessions (Creator Only) ===
             if is_pipeline_creator:
                 media_session = await self._get_media_session(file_id)
