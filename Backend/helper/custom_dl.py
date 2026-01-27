@@ -546,7 +546,6 @@ class ByteStreamer:
                 STREAM_PIPELINES[stream_id] = pipeline
                 LOGGER.info(f"Stream {stream_id[:8]}: NEW pipeline (bots={pipeline.all_client_indices()}, offset={offset})")
         
-        try:
             # === PHASE 2: Pre-warm Sessions (Creator Only) ===
             if is_pipeline_creator:
                 media_session = await self._get_media_session(file_id)
