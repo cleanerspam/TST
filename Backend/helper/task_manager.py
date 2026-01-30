@@ -44,10 +44,10 @@ async def delete_message(chat_id: int, msg_id: int):
     # Determine max retries based on available clients
     # Loop through all clients twice to ensure we give everyone a chance
     client_count = len(multi_clients) + 1 if multi_clients else 1
-    max_retries = client_count # Iterate through all bots exactly once
-    
+    max_retries = max(client_count, 3) # At least 3 attempts
+
     denied_clients = []
-    
+
     for attempt in range(max_retries):
         client = get_next_client()
         try:
@@ -56,44 +56,35 @@ async def delete_message(chat_id: int, msg_id: int):
                 message_ids=msg_id
             )
             # await sleep(2) # Removed forced sleep to speed up bulk operations
-            
-            # Log any aggregated permission errors before success log
-            if denied_clients:
-                 LOGGER.warning(f"Permission denied for Client: {','.join(denied_clients)} deletion in {chat_id} of msg_id {msg_id}")
-            
+
             LOGGER.info(f"Deleted message {msg_id} in {chat_id} using Client: {client.name}")
             return # Success
-            
+
         except FloodWait as e:
             wait_time = e.value
             LOGGER.warning(f"FloodWait {wait_time}s on Client: {client.name} (attempt {attempt + 1}/{max_retries})")
-            
+
             if attempt >= max_retries - 1:
                  LOGGER.info(f"All bots hit FloodWait. Waiting {wait_time}s before final retry...")
                  await sleep(wait_time + 1)
                  try:
                      await client.delete_messages(chat_id=chat_id, message_ids=msg_id)
-                     if denied_clients:
-                        LOGGER.warning(f"Permission denied for Client: {','.join(denied_clients)} deletion in {chat_id} of msg_id {msg_id}")
                      LOGGER.info(f"Deleted message {msg_id} in {chat_id} after FloodWait using Client: {client.name}")
                      return
                  except Exception as final_e:
                      LOGGER.error(f"Failed to delete {msg_id} after waiting for FloodWait: {final_e}")
                      break
-            
+
             continue
-            
+
         except MessageDeleteForbidden:
             denied_clients.append(client.name)
             continue # Try next client
-            
+
         except Exception as e:
             LOGGER.error(f"Error while deleting message {msg_id} in {chat_id} using Client: {client.name}: {e}")
             continue
 
-    if denied_clients:
-        LOGGER.warning(f"Permission denied for Client: {','.join(denied_clients)} deletion in {chat_id} of msg_id {msg_id}")
-        
     LOGGER.error(f"Failed to delete message {msg_id} in {chat_id} after {max_retries} attempts.")
 
 async def delete_multiple_messages(messages: list):
@@ -169,3 +160,8 @@ async def delete_multiple_messages(messages: list):
         
     if tasks:
         await asyncio.gather(*tasks)
+
+
+# Note: The process_pending_deletions function is removed as these messages
+# can only be deleted by user sessions, not normal bot sessions.
+# The require_user_delete collection is meant for user sessions to handle.

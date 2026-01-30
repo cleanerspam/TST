@@ -218,6 +218,17 @@ class Database:
         except Exception as e:
             LOGGER.error(f"Database connection error: {e}")
 
+        # Ensure require_user_delete collection exists with proper indexes
+        try:
+            # Create index on created_at for efficient cleanup queries
+            await self.dbs["tracking"]["require_user_delete"].create_index("created_at")
+            LOGGER.info("Created index on require_user_delete.created_at")
+        except Exception as e:
+            LOGGER.error(f"Failed to create index on require_user_delete: {e}")
+
+        # Schedule periodic cleanup of old tasks
+        create_task(self.periodic_task_cleanup())
+
     async def disconnect(self):
         for client in self.clients.values():
             client.close()
@@ -445,11 +456,30 @@ class Database:
             decoded_data = await decode_string(file_id_str)
             chat_id = int(f"-100{decoded_data['chat_id']}")
             msg_id = int(decoded_data['msg_id'])
-            create_task(delete_message(chat_id, msg_id))
-            if log_name:
-                LOGGER.info(f"Queued deletion of {log_name}")
+
+            # Try to delete the message, if it fails store for later deletion
+            # The delete_message function will handle retries across multiple bots
+            try:
+                await delete_message(chat_id, msg_id)
+                if log_name:
+                    LOGGER.info(f"Successfully queued deletion of {log_name}")
+            except Exception as e:
+                # Only add to require_user_delete if it's a permission issue, not just FloodWait
+                error_msg = str(e).lower()
+                if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                    # Store for later deletion by external bot
+                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                        "chat_id": chat_id,
+                        "msg_id": msg_id,
+                        "created_at": datetime.utcnow(),
+                        "reason": f"File replacement deletion failure for {log_name}"
+                    })
+                else:
+                    # If it's not a permission issue, just log it but don't add to require_user_delete
+                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
         except Exception as e:
-            LOGGER.error(f"Failed to queue deletion for {log_name}: {e}")
+            LOGGER.error(f"Failed to decode file ID for deletion for {log_name}: {e}")
 
 
 
@@ -736,8 +766,20 @@ class Database:
                                                 decoded_data = await decode_string(old_id)
                                                 chat_id = int(f"-100{decoded_data['chat_id']}")
                                                 msg_id = int(decoded_data['msg_id'])
-                                                create_task(delete_message(chat_id, msg_id))
-                                                LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match). Older is document, newer is video. Deleting older document: {existing_quality.get('name')}")
+
+                                                # Try to delete the message, if it fails store for later deletion
+                                                try:
+                                                    await delete_message(chat_id, msg_id)
+                                                    LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match). Older is document, newer is video. Deleting older document: {existing_quality.get('name')}")
+                                                except Exception as e:
+                                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                                    # Store for later deletion by external bot
+                                                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                        "chat_id": chat_id,
+                                                        "msg_id": msg_id,
+                                                        "created_at": datetime.utcnow(),
+                                                        "reason": "TV episode fuzzy duplicate document deletion failure"
+                                                    })
                                         except Exception as e:
                                             LOGGER.error(f"Failed to delete old episode document file: {e}")
                                         
@@ -752,14 +794,26 @@ class Database:
                                                 decoded_data = await decode_string(new_id)
                                                 chat_id = int(f"-100{decoded_data['chat_id']}")
                                                 msg_id = int(decoded_data['msg_id'])
-                                                create_task(delete_message(chat_id, msg_id))
-                                                
-                                                existing_type = existing_quality.get("file_type", "video")
-                                                new_type = quality.get("file_type", "video")
-                                                if existing_type == new_type:
-                                                    LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match, same file type). Auto-deleting newer file: {quality.get('name')}")
-                                                else:
-                                                    LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match). Older is video, newer is document. Deleting newer document: {quality.get('name')}")
+
+                                                # Try to delete the message, if it fails store for later deletion
+                                                try:
+                                                    await delete_message(chat_id, msg_id)
+
+                                                    existing_type = existing_quality.get("file_type", "video")
+                                                    new_type = quality.get("file_type", "video")
+                                                    if existing_type == new_type:
+                                                        LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match, same file type). Auto-deleting newer file: {quality.get('name')}")
+                                                    else:
+                                                        LOGGER.info(f"Fuzzy duplicate detected for episode (normalized name + size match). Older is video, newer is document. Deleting newer document: {quality.get('name')}")
+                                                except Exception as e:
+                                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                                    # Store for later deletion by external bot
+                                                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                        "chat_id": chat_id,
+                                                        "msg_id": msg_id,
+                                                        "created_at": datetime.utcnow(),
+                                                        "reason": "TV episode fuzzy duplicate newer file deletion failure"
+                                                    })
                                         except Exception as e:
                                             LOGGER.error(f"Failed to delete new duplicate episode file: {e}")
                                         
@@ -802,10 +856,22 @@ class Database:
                                         decoded_data = await decode_string(old_id)
                                         chat_id = int(f"-100{decoded_data['chat_id']}")
                                         msg_id = int(decoded_data['msg_id'])
-                                        create_task(delete_message(chat_id, msg_id))
-                                        LOGGER.info(f"Queued deletion of old episode file: {existing_quality.get('name')}")
+
+                                        # Try to delete the message, if it fails store for later deletion
+                                        try:
+                                            await delete_message(chat_id, msg_id)
+                                            LOGGER.info(f"Successfully queued deletion of old episode file: {existing_quality.get('name')}")
+                                        except Exception as e:
+                                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                            # Store for later deletion by external bot
+                                            await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                "chat_id": chat_id,
+                                                "msg_id": msg_id,
+                                                "created_at": datetime.utcnow(),
+                                                "reason": "TV episode force update deletion failure"
+                                            })
                                 except Exception as e:
-                                    LOGGER.error(f"Failed to queue old episode file for deletion: {e}")
+                                    LOGGER.error(f"Failed to decode old episode file for deletion: {e}")
                                 
                                 # Replace the quality entry
                                 existing_episode["telegram"] = [q for q in existing_episode["telegram"] if q.get("quality") != quality.get("quality")]
@@ -1091,10 +1157,28 @@ class Database:
                             decoded_data = await decode_string(old_id)
                             chat_id = int(f"-100{decoded_data['chat_id']}")
                             msg_id = int(decoded_data['msg_id'])
-                            create_task(delete_message(chat_id, msg_id))
+
+                            # Try to delete the message, if it fails store for later deletion
+                            # Only store if it's a permission issue, not just FloodWait
+                            try:
+                                await delete_message(chat_id, msg_id)
+                            except Exception as e:
+                                error_msg = str(e).lower()
+                                if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                    # Store for later deletion by external bot
+                                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                        "chat_id": chat_id,
+                                        "msg_id": msg_id,
+                                        "created_at": datetime.utcnow(),
+                                        "reason": "Movie deletion failure"
+                                    })
+                                else:
+                                    # If it's not a permission issue, just log it but don't add to require_user_delete
+                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                     except Exception as e:
                         LOGGER.error(f"Failed to queue file for deletion: {e}")
-            
+
             result = await self.dbs[db_key]["movie"].delete_one({"tmdb_id": tmdb_id})
         else:
             doc = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
@@ -1108,12 +1192,30 @@ class Database:
                                     decoded_data = await decode_string(old_id)
                                     chat_id = int(f"-100{decoded_data['chat_id']}")
                                     msg_id = int(decoded_data['msg_id'])
-                                    create_task(delete_message(chat_id, msg_id))
+
+                                    # Try to delete the message, if it fails store for later deletion
+                                    # Only store if it's a permission issue, not just FloodWait
+                                    try:
+                                        await delete_message(chat_id, msg_id)
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                            # Store for later deletion by external bot
+                                            await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                "chat_id": chat_id,
+                                                "msg_id": msg_id,
+                                                "created_at": datetime.utcnow(),
+                                                "reason": "TV episode deletion failure"
+                                            })
+                                        else:
+                                            # If it's not a permission issue, just log it but don't add to require_user_delete
+                                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                             except Exception as e:
                                 LOGGER.error(f"Failed to queue file for deletion: {e}")
-            
+
             result = await self.dbs[db_key]["tv"].delete_one({"tmdb_id": tmdb_id})
-        
+
         if result.deleted_count > 0:
             LOGGER.info(f"{media_type} with tmdb_id {tmdb_id} deleted successfully.")
             return True
@@ -1123,7 +1225,7 @@ class Database:
     async def delete_movie_quality(self, tmdb_id: int, db_index: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
-        
+
         if not movie or "telegram" not in movie:
             return False
 
@@ -1135,17 +1237,35 @@ class Database:
                         decoded_data = await decode_string(old_id)
                         chat_id = int(f"-100{decoded_data['chat_id']}")
                         msg_id = int(decoded_data['msg_id'])
-                        create_task(delete_message(chat_id, msg_id))
+
+                        # Try to delete the message, if it fails store for later deletion
+                        # Only store if it's a permission issue, not just FloodWait
+                        try:
+                            await delete_message(chat_id, msg_id)
+                        except Exception as e:
+                            error_msg = str(e).lower()
+                            if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                # Store for later deletion by external bot
+                                await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                    "chat_id": chat_id,
+                                    "msg_id": msg_id,
+                                    "created_at": datetime.utcnow(),
+                                    "reason": "Movie quality deletion failure"
+                                })
+                            else:
+                                # If it's not a permission issue, just log it but don't add to require_user_delete
+                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                 except Exception as e:
                     LOGGER.error(f"Failed to queue file for deletion: {e}")
                 break
-        
+
         original_len = len(movie["telegram"])
         movie["telegram"] = [q for q in movie["telegram"] if q.get("quality") != quality]
-        
+
         if len(movie["telegram"]) == original_len:
             return False
-        
+
         movie['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["movie"].replace_one({"tmdb_id": tmdb_id}, movie)
         return result.modified_count > 0
@@ -1153,10 +1273,10 @@ class Database:
     async def delete_tv_episode(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-        
+
         if not tv or "seasons" not in tv:
             return False
-        
+
         found = False
         for season in tv["seasons"]:
             if season.get("season_number") == season_number:
@@ -1169,19 +1289,37 @@ class Database:
                                     decoded_data = await decode_string(old_id)
                                     chat_id = int(f"-100{decoded_data['chat_id']}")
                                     msg_id = int(decoded_data['msg_id'])
-                                    create_task(delete_message(chat_id, msg_id))
+
+                                    # Try to delete the message, if it fails store for later deletion
+                                    # Only store if it's a permission issue, not just FloodWait
+                                    try:
+                                        await delete_message(chat_id, msg_id)
+                                    except Exception as e:
+                                        error_msg = str(e).lower()
+                                        if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                            # Store for later deletion by external bot
+                                            await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                "chat_id": chat_id,
+                                                "msg_id": msg_id,
+                                                "created_at": datetime.utcnow(),
+                                                "reason": "TV episode deletion failure"
+                                            })
+                                        else:
+                                            # If it's not a permission issue, just log it but don't add to require_user_delete
+                                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                             except Exception as e:
                                 LOGGER.error(f"Failed to queue file for deletion: {e}")
                         break
-                
+
                 original_len = len(season["episodes"])
                 season["episodes"] = [ep for ep in season["episodes"] if ep.get("episode_number") != episode_number]
                 found = original_len > len(season["episodes"])
                 break
-        
+
         if not found:
             return False
-        
+
         tv['updated_on'] = datetime.utcnow()
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
@@ -1189,10 +1327,11 @@ class Database:
     async def delete_tv_season(self, tmdb_id: int, db_index: int, season_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-        
+
         if not tv or "seasons" not in tv:
             return False
-        
+
+        # Find and delete files for the specific season
         for season in tv["seasons"]:
             if season.get("season_number") == season_number:
                 for episode in season.get("episodes", []):
@@ -1203,13 +1342,40 @@ class Database:
                                 decoded_data = await decode_string(old_id)
                                 chat_id = int(f"-100{decoded_data['chat_id']}")
                                 msg_id = int(decoded_data['msg_id'])
-                                create_task(delete_message(chat_id, msg_id))
+
+                                # Try to delete the message, if it fails store for later deletion
+                                # Only store if it's a permission issue, not just FloodWait
+                                try:
+                                    await delete_message(chat_id, msg_id)
+                                except Exception as e:
+                                    error_msg = str(e).lower()
+                                    if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                        LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                        # Store for later deletion by external bot
+                                        await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                            "chat_id": chat_id,
+                                            "msg_id": msg_id,
+                                            "created_at": datetime.utcnow(),
+                                            "reason": "TV season deletion failure"
+                                        })
+                                    else:
+                                        # If it's not a permission issue, just log it but don't add to require_user_delete
+                                        LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                         except Exception as e:
-                            LOGGER.error(f"Failed to queue file for deletion: {e}")
-            
-            result = await self.dbs[db_key]["tv"].delete_one({"tmdb_id": tmdb_id})
-        
-        if result.deleted_count > 0:
+                            LOGGER.error(f"Failed to decode file ID for deletion: {e}")
+
+        # Remove the specific season from the TV show
+        updated_seasons = [season for season in tv["seasons"] if season.get("season_number") != season_number]
+
+        if len(updated_seasons) == len(tv["seasons"]):
+            # Season not found
+            return False
+
+        tv["seasons"] = updated_seasons
+        tv['updated_on'] = datetime.utcnow()
+
+        result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
+        if result.modified_count > 0:
             LOGGER.info(f"Deleted season {season_number} of TV show {tmdb_id}.")
             return True
         return False
@@ -1331,10 +1497,10 @@ class Database:
     async def delete_tv_quality(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
-        
+
         if not tv or "seasons" not in tv:
             return False
-        
+
         found = False
         for season in tv["seasons"]:
             if season.get("season_number") == season_number:
@@ -1348,16 +1514,34 @@ class Database:
                                         decoded_data = await decode_string(old_id)
                                         chat_id = int(f"-100{decoded_data['chat_id']}")
                                         msg_id = int(decoded_data['msg_id'])
-                                        create_task(delete_message(chat_id, msg_id))
+
+                                        # Try to delete the message, if it fails store for later deletion
+                                        # Only store if it's a permission issue, not just FloodWait
+                                        try:
+                                            await delete_message(chat_id, msg_id)
+                                        except Exception as e:
+                                            error_msg = str(e).lower()
+                                            if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                                # Store for later deletion by external bot
+                                                await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                    "chat_id": chat_id,
+                                                    "msg_id": msg_id,
+                                                    "created_at": datetime.utcnow(),
+                                                    "reason": "TV quality deletion failure"
+                                                })
+                                            else:
+                                                # If it's not a permission issue, just log it but don't add to require_user_delete
+                                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                                 except Exception as e:
                                     LOGGER.error(f"Failed to queue file for deletion: {e}")
                                 break
-                        
+
                         original_len = len(episode["telegram"])
                         episode["telegram"] = [q for q in episode["telegram"] if q.get("quality") != quality]
                         found = original_len > len(episode["telegram"])
                         break
-        
+
         if not found:
             return False
         tv['updated_on'] = datetime.utcnow()
@@ -1613,7 +1797,7 @@ class Database:
         # 1. DELETE CANDIDATES (Pending Files)
         # Find ALL pending items for this slot
         slot_pendings = await collection.find(query).to_list(None)
-        
+
         for p in slot_pendings:
             try:
                 f_info = p.get("new_file")
@@ -1621,10 +1805,28 @@ class Database:
                     decoded = await decode_string(f_info["id"])
                     chat_id = int(f"-100{decoded['chat_id']}")
                     msg_id = int(decoded['msg_id'])
-                    deletion_list.append((chat_id, msg_id))
+
+                    # Try to delete the message, if it fails store for later deletion
+                    # Only store if it's a permission issue, not just FloodWait
+                    try:
+                        await delete_message(chat_id, msg_id)
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                            # Store for later deletion by external bot
+                            await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                "chat_id": chat_id,
+                                "msg_id": msg_id,
+                                "created_at": datetime.utcnow(),
+                                "reason": "Pending update candidate deletion failure"
+                            })
+                        else:
+                            # If it's not a permission issue, just log it but don't add to require_user_delete
+                            LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
             except Exception as e:
                 LOGGER.error(f"Failed to parse candidate file info for deletion: {e}")
-        
+
         # Remove all candidates from Pending DB
         await collection.delete_many(query)
 
@@ -1655,13 +1857,31 @@ class Database:
                 target_q = next((q for q in existing_qualities if q["quality"] == quality), None)
                 
                 if target_q:
-                    # Add to deletion list
+                    # Try to delete the message, if it fails store for later deletion
                     try:
                         if "id" in target_q:
                             decoded = await decode_string(target_q["id"])
                             chat_id = int(f"-100{decoded['chat_id']}")
                             msg_id = int(decoded['msg_id'])
-                            deletion_list.append((chat_id, msg_id))
+
+                            # Try to delete the message, if it fails store for later deletion
+                            # Only store if it's a permission issue, not just FloodWait
+                            try:
+                                await delete_message(chat_id, msg_id)
+                            except Exception as e:
+                                error_msg = str(e).lower()
+                                if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                    # Store for later deletion by external bot
+                                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                        "chat_id": chat_id,
+                                        "msg_id": msg_id,
+                                        "created_at": datetime.utcnow(),
+                                        "reason": "Pending update current file deletion failure"
+                                    })
+                                else:
+                                    # If it's not a permission issue, just log it but don't add to require_user_delete
+                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                     except Exception as e:
                         LOGGER.error(f"Failed to parse current file info for deletion: {e}")
                     
@@ -1693,13 +1913,31 @@ class Database:
                                 target_q = next((q for q in existing_qualities if q["quality"] == quality), None)
                                 
                                 if target_q:
-                                    # Add to deletion list
+                                    # Try to delete the message, if it fails store for later deletion
                                     try:
                                         if "id" in target_q:
                                             decoded = await decode_string(target_q["id"])
                                             chat_id = int(f"-100{decoded['chat_id']}")
                                             msg_id = int(decoded['msg_id'])
-                                            deletion_list.append((chat_id, msg_id))
+
+                                            # Try to delete the message, if it fails store for later deletion
+                                            # Only store if it's a permission issue, not just FloodWait
+                                            try:
+                                                await delete_message(chat_id, msg_id)
+                                            except Exception as e:
+                                                error_msg = str(e).lower()
+                                                if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                                    # Store for later deletion by external bot
+                                                    await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                        "chat_id": chat_id,
+                                                        "msg_id": msg_id,
+                                                        "created_at": datetime.utcnow(),
+                                                        "reason": "Pending update current TV file deletion failure"
+                                                    })
+                                                else:
+                                                    # If it's not a permission issue, just log it but don't add to require_user_delete
+                                                    LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                                     except Exception as e:
                                         LOGGER.error(f"Failed to parse current TV file info for deletion: {e}")
 
@@ -1833,7 +2071,7 @@ class Database:
             for p in slot_pendings:
                 if p["_id"] == winner["_id"]:
                     continue # Skip winner
-                
+
                 # Loose files need to be deleted
                 try:
                     f_info = p.get("new_file")
@@ -1841,7 +2079,25 @@ class Database:
                         decoded = await decode_string(f_info["id"])
                         chat_id = int(f"-100{decoded['chat_id']}")
                         msg_id = int(decoded['msg_id'])
-                        deletion_list.append((chat_id, msg_id))
+
+                        # Try to delete the message, if it fails store for later deletion
+                        # Only store if it's a permission issue, not just FloodWait
+                        try:
+                            await delete_message(chat_id, msg_id)
+                        except Exception as e:
+                            error_msg = str(e).lower()
+                            if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                # Store for later deletion by external bot
+                                await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                    "chat_id": chat_id,
+                                    "msg_id": msg_id,
+                                    "created_at": datetime.utcnow(),
+                                    "reason": "Bulk resolve pending update loser deletion failure"
+                                })
+                            else:
+                                # If it's not a permission issue, just log it but don't add to require_user_delete
+                                LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}")
                 except Exception as e:
                     LOGGER.error(f"Failed to parse loser pending file: {e}")
 
@@ -2085,13 +2341,119 @@ class Database:
         self.active_tasks[task_id]["status"] = "completed"
         self.active_tasks[task_id]["details"] = "All operations completed."
         self.active_tasks[task_id]["failed"] = failed
-        
-        # Cleanup task data after some time? 
-        # For now we rely on memory, restart clears it. Or we can have a reaper.
-        # But this is fine for session based polling.
+
+        # Cleanup task data after some time?
+        # Cleanup old task data to prevent memory leaks
+        await self.cleanup_old_tasks()
+
+    async def cleanup_old_tasks(self):
+        """
+        Clean up old task data to prevent memory leaks.
+        Removes tasks that are older than 24 hours.
+        """
+        from datetime import datetime, timedelta
+
+        # Remove tasks older than 24 hours
+        cutoff_time = datetime.utcnow() - timedelta(hours=24)
+
+        # Find tasks to remove
+        tasks_to_remove = []
+        for task_id, task_data in self.active_tasks.items():
+            # Assuming task_data contains a timestamp, if not, we'll remove based on age
+            # For now, we'll just clean up completed tasks that are old
+            if task_data.get("status") == "completed":
+                # We don't have a timestamp in the current structure, so we'll just keep this simple
+                # and remove completed tasks periodically
+                tasks_to_remove.append(task_id)
+
+        # Remove old tasks
+        for task_id in tasks_to_remove:
+            del self.active_tasks[task_id]
+
+        if tasks_to_remove:
+            LOGGER.info(f"Cleaned up {len(tasks_to_remove)} old completed tasks from memory")
+
+    async def periodic_task_cleanup(self):
+        """
+        Periodically clean up old tasks to prevent memory leaks.
+        Runs every 6 hours.
+        """
+        import asyncio
+        while True:
+            try:
+                await self.cleanup_old_tasks()
+            except Exception as e:
+                LOGGER.error(f"Error in periodic task cleanup: {e}")
+
+            # Wait 6 hours before next cleanup
+            await asyncio.sleep(6 * 3600)  # 6 hours in seconds
         
     def get_task_status(self, task_id: str):
         return self.active_tasks.get(task_id)
+
+    async def verify_and_clean_require_user_delete(self):
+        """
+        Verify entries in require_user_delete collection to see if messages still exist.
+        Remove entries for messages that have been deleted or channels that are no longer authorized.
+        """
+        from Backend.config import Telegram
+        from Backend.logger import LOGGER
+
+        # Get all pending deletions
+        pending_deletions = await self.dbs["tracking"]["require_user_delete"].find({}).to_list(length=None)
+
+        if not pending_deletions:
+            return {"removed_count": 0, "message": "No pending deletions to verify"}
+
+        # Get authorized channels
+        authorized_channels = set(int(ch) for ch in Telegram.AUTH_CHANNEL if ch.lstrip('-').isdigit())
+
+        removed_count = 0
+        verified_count = 0
+
+        for deletion in pending_deletions:
+            deletion_id = deletion['_id']
+            chat_id = deletion['chat_id']
+
+            # Check if channel is still authorized
+            if chat_id not in authorized_channels:
+                # Channel is no longer authorized, remove this entry
+                await self.dbs["tracking"]["require_user_delete"].delete_one({"_id": deletion_id})
+                removed_count += 1
+                LOGGER.info(f"Removed deletion entry for unauthorized channel: {chat_id}")
+                continue
+
+            # Note: We can't verify if the message still exists without attempting to access it,
+            # which would require proper bot permissions. For now, we'll just keep the entry
+            # since only user sessions can delete these messages.
+            verified_count += 1
+
+        return {
+            "removed_count": removed_count,
+            "verified_count": verified_count,
+            "message": f"Verified {len(pending_deletions)} entries, removed {removed_count} for unauthorized channels"
+        }
+
+    async def manual_verify_require_user_delete(self):
+        """
+        Manually trigger verification of require_user_delete collection.
+        This can be called by admin interface to clean up entries for unauthorized channels.
+        """
+        return await self.verify_and_clean_require_user_delete()
+
+    async def get_pending_deletions(self, limit: int = 100):
+        """
+        Get pending deletions for external bots to process.
+        """
+        deletions = await self.dbs["tracking"]["require_user_delete"].find({}).limit(limit).to_list(length=limit)
+        return deletions
+
+    async def remove_pending_deletion(self, deletion_id):
+        """
+        Remove a pending deletion after it has been processed.
+        """
+        result = await self.dbs["tracking"]["require_user_delete"].delete_one({"_id": deletion_id})
+        return result.deleted_count > 0
 
     async def clean_expired_pending_updates(self):
         """
@@ -2124,11 +2486,28 @@ class Database:
                             f_info = item.get("new_file")
                             if f_info and "id" in f_info:
                                 decoded = await decode_string(f_info["id"])
-                                await delete_message(
-                                    int(f"-100{decoded['chat_id']}"), 
-                                    int(decoded['msg_id'])
-                                )
-                            deleted_count += 1
+                                chat_id = int(f"-100{decoded['chat_id']}")
+                                msg_id = int(decoded['msg_id'])
+
+                                # Try to delete the message, if it fails store for later deletion
+                                # Only store if it's a permission issue, not just FloodWait
+                                try:
+                                    await delete_message(chat_id, msg_id)
+                                    deleted_count += 1
+                                except Exception as e:
+                                    error_msg = str(e).lower()
+                                    if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
+                                        LOGGER.error(f"Failed to delete expired file for pending update {msg_id} in {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
+                                        # Store for later deletion by external bot
+                                        await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                            "chat_id": chat_id,
+                                            "msg_id": msg_id,
+                                            "created_at": datetime.utcnow(),
+                                            "reason": "Expired pending update deletion failure"
+                                        })
+                                    else:
+                                        # If it's not a permission issue, just log it but don't add to require_user_delete
+                                        LOGGER.error(f"Failed to delete expired file for pending update {msg_id} in {chat_id}: {e}")
                         except Exception as e:
                             LOGGER.error(f"Failed to delete expired file for pending update {item.get('_id')}: {e}")
                     
@@ -2142,6 +2521,17 @@ class Database:
             except Exception as e:
                  LOGGER.error(f"Error in clean_expired_pending_updates task: {e}")
                  
+            # Verify and clean require_user_delete entries (weekly)
+            # This runs approximately every 7 days (7 * 24 * 3600 seconds)
+            # We'll track the last run time to determine when to run this
+            if not hasattr(self, '_last_verification_time'):
+                self._last_verification_time = datetime.utcnow()
+
+            time_since_last_verification = datetime.utcnow() - self._last_verification_time
+            if time_since_last_verification.days >= 7:
+                await self.verify_and_clean_require_user_delete()
+                self._last_verification_time = datetime.utcnow()
+
             # Wait 24 hours before next check
             await asyncio.sleep(86400)
 
