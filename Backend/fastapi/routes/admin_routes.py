@@ -143,12 +143,34 @@ def restart_process():
     """
     import time
     import shutil
-    
+    import subprocess
+    import os
+    import logging
+
     time.sleep(1) # Give time for response to be sent
-    
-    # Always use the current interpreter to ensure we stay in the same environment (venv/system)
-    # This avoids issues where 'uv' might try to use a different env or is not found in PATH context
-    os.execv(sys.executable, [sys.executable, '-m', 'Backend'])
+
+    # Run update.py first, similar to Telegram restart
+    try:
+        subprocess.run(['uv', 'run', 'update.py'], check=False)  # Don't raise exception if it fails
+    except Exception as e:
+        # Log the error but continue with restart
+        logging.error(f"Error running update.py during restart: {e}")
+
+    # Save restart message info for consistency with Telegram restart
+    try:
+        with open(".restartmsg", "w") as f:
+            f.write(f"0\n0\n")  # Placeholder values since webUI doesn't have chat/message IDs
+    except Exception as e:
+        logging.error(f"Error writing restart message info: {e}")
+
+    # Find uv executable and restart using it, similar to Telegram restart
+    uv_path = shutil.which("uv")
+    if uv_path:
+        # Use execl to replace the current process with uv run -m Backend
+        os.execl(uv_path, uv_path, "run", "-m", "Backend")
+    else:
+        # Fallback to original method if uv is not found
+        os.execv(sys.executable, [sys.executable, '-m', 'Backend'])
 
 # ---------------------------
 # MANAGED UPDATES ROUTES
