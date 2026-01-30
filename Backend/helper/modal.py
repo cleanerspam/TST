@@ -12,6 +12,7 @@ class QualityDetail(BaseModel):
     size: str
     dc_id: Optional[int] = None
     file_type: Optional[str] = "video"
+    file_unique_id: Optional[str] = None
 
 
 # ---------------------------

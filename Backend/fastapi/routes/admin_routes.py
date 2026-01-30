@@ -369,3 +369,4 @@ async def search_duplicates_route(
         "page": page,
         "page_size": page_size
     }
+

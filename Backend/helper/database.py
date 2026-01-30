@@ -33,29 +33,53 @@ def convert_objectid_to_str(document: Dict[str, Any]) -> Dict[str, Any]:
 def _normalize_filename(filename: str) -> str:
     """
     Normalize filename for fuzzy matching to handle naming variations.
-    
+
     Handles:
     - Lowercase conversion
     - Underscore to space conversion
     - Multiple/extra whitespace removal
-    - Double extensions (e.g., .mkv.mkv -> .mkv)
+    - Multiple extensions (e.g., .mkv.mkv, .mkv.mp4 -> .mkv)
+    - Common naming patterns
     """
     if not filename:
         return ""
-    
+
     # Convert to lowercase for case-insensitive comparison
     normalized = filename.lower().strip()
-    
+
     # Replace underscores with spaces
     normalized = normalized.replace('_', ' ')
-    
+
     # Remove multiple spaces
     normalized = re.sub(r'\s+', ' ', normalized)
-    
-    # Handle double extensions (e.g., .mkv.mkv -> .mkv)
-    # Match pattern: .ext.ext at the end
-    normalized = re.sub(r'\.(\w+)\.(\1)$', r'.\1', normalized)
-    
+
+    # Handle multiple extensions (e.g., .mkv.mkv, .mkv.mp4, .mp4.mkv -> keep first valid extension)
+    # Split by dots and find the actual filename and extensions
+    parts = normalized.rsplit('.', 2)  # Split from the right, max 2 splits
+
+    if len(parts) > 1:
+        # Check if the last part is a valid extension
+        possible_ext = parts[-1]
+        valid_extensions = {
+            'mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', '3gp', 'mpg', 'mpeg',
+            'm2ts', 'ts', 'vob', 'ifo', 'rmvb', 'divx', 'xvid', 'ogv', 'ogg', 'qt', 'rm'
+        }
+
+        if possible_ext in valid_extensions:
+            # Last part is a valid extension, check if second-to-last is also an extension
+            if len(parts) == 3 and parts[-2] in valid_extensions:
+                # We have filename.ext1.ext2 pattern - keep only the first extension
+                normalized = f"{parts[0]}.{parts[-1]}"
+            elif len(parts) == 2:
+                # We have filename.ext pattern - this is normal
+                normalized = f"{parts[0]}.{parts[1]}"
+        else:
+            # Last part is not a valid extension, treat as part of filename
+            normalized = '.'.join(parts)
+    else:
+        # No extensions found
+        normalized = parts[0]
+
     return normalized
 
 
@@ -63,11 +87,19 @@ def _is_fuzzy_duplicate(existing_file: dict, new_file: dict) -> bool:
     """
     Check if two files are fuzzy duplicates (same normalized name and size).
     Returns True if files match after normalization.
+    Also considers file_unique_id if available to detect exact duplicates.
     """
+    # If both files have file_unique_id and they match, these are exact duplicates
+    existing_unique_id = existing_file.get("file_unique_id")
+    new_unique_id = new_file.get("file_unique_id")
+
+    if existing_unique_id and new_unique_id and existing_unique_id == new_unique_id:
+        return True
+
     existing_name_normalized = _normalize_filename(existing_file.get("name", ""))
     new_name_normalized = _normalize_filename(new_file.get("name", ""))
-    
-    return (existing_name_normalized == new_name_normalized and 
+
+    return (existing_name_normalized == new_name_normalized and
             existing_file.get("size") == new_file.get("size"))
 
 
@@ -75,18 +107,68 @@ def _should_delete_existing(existing_file: dict, new_file: dict) -> bool:
     """
     Determine if existing file should be deleted instead of new file.
     Returns True if we should delete the EXISTING file (keep new one).
-    
-    Logic: Prefer video files over document files for streaming.
+
+    This function is only called when files are considered duplicates (same quality).
+    Decision tree applies only when files are actually duplicates:
+    1. If same file_unique_id, it's the same file - delete one that is not in DC4
+    2. If fuzzy name matches, apply DC4 preference rules
+    3. Otherwise, return False (keep existing, reject new as they're not duplicates)
     """
-    existing_type = existing_file.get("file_type", "video")
-    new_type = new_file.get("file_type", "video")
-    
-    # If older is document and newer is video, delete the older document
-    if existing_type == "document" and new_type == "video":
-        return True
-    
-    # Otherwise keep existing, delete new
-    return False
+    # Check if these are actually the same file (same file_unique_id)
+    existing_unique_id = existing_file.get("file_unique_id")
+    new_unique_id = new_file.get("file_unique_id")
+
+    if existing_unique_id and new_unique_id and existing_unique_id == new_unique_id:
+        # Same file, different DCs - delete one that is not in DC4
+        existing_in_dc4 = existing_file.get("dc_id") == 4
+        new_in_dc4 = new_file.get("dc_id") == 4
+
+        if existing_in_dc4 and not new_in_dc4:
+            # Existing is in DC4, new is not - keep existing, delete new
+            return False
+        elif not existing_in_dc4 and new_in_dc4:
+            # New is in DC4, existing is not - delete existing, keep new
+            return True
+        elif existing_in_dc4 and new_in_dc4:
+            # Both in DC4 - keep existing (older)
+            return False
+        else:
+            # Both not in DC4 - keep existing (older)
+            return False
+
+    # Check if files are fuzzy duplicates (same normalized name and size)
+    if _is_fuzzy_duplicate(existing_file, new_file):
+        # Apply the decision tree for fuzzy duplicates
+        existing_type = existing_file.get("file_type", "video")
+        new_type = new_file.get("file_type", "video")
+        existing_dc = existing_file.get("dc_id")
+        new_dc = new_file.get("dc_id")
+
+        # Check if files are in DC4
+        existing_in_dc4 = existing_dc == 4
+        new_in_dc4 = new_dc == 4
+
+        # If one is in DC4 and the other isn't, prefer the one in DC4
+        if existing_in_dc4 and not new_in_dc4:
+            return False  # Keep existing (in DC4), delete new
+        elif not existing_in_dc4 and new_in_dc4:
+            return True   # Delete existing, keep new (in DC4)
+
+        # Both in same DC status (both in DC4 or both not in DC4)
+        # If types are different, prefer video over document
+        if existing_type != new_type:
+            # If existing is document and new is video, delete existing to prefer video
+            if existing_type == "document" and new_type == "video":
+                return True
+            # If existing is video and new is document, keep existing to prefer video
+            elif existing_type == "video" and new_type == "document":
+                return False
+
+        # Both same type and both in same DC status - prefer older one (keep existing)
+        return False
+    else:
+        # Not fuzzy duplicates, so don't delete existing - reject the new file
+        return False
 
 
 
@@ -148,6 +230,50 @@ class Database:
             upsert=True
         )
 
+    async def _fetch_telegram_file_info_with_unique_id(self, encoded_id):
+        """
+        Fetch file info from Telegram including file_unique_id if missing in DB.
+        Uses self.bot_client injected at startup.
+        """
+        if not self.bot_client:
+            LOGGER.warning("Bot client not set in Database - skipping file info fetch")
+            return None, None, None
+
+        try:
+            decoded = await decode_string(encoded_id)
+            chat_id = int(f"-100{decoded['chat_id']}")
+            msg_id = int(decoded['msg_id'])
+
+            try:
+                message = await self.bot_client.get_messages(chat_id, msg_id)
+            except FloodWait as e:
+                LOGGER.warning(f"FloodWait {e.value}s on fetch_info. Sleeping...")
+                await asyncio.sleep(e.value)
+                message = await self.bot_client.get_messages(chat_id, msg_id)
+
+            if not message or message.empty:
+                return None, None, None
+
+            file = message.video or message.document
+            if not file:
+                return None, None, None
+
+            # Extract dc_id from file_id
+            try:
+                file_id_obj = FileId.decode(file.file_id)
+                dc_id = file_id_obj.dc_id
+            except Exception as e:
+                LOGGER.warning(f"Failed to extract dc_id: {e}")
+                dc_id = None
+
+            file_type = "video" if message.video else "document"
+            file_unique_id = file.file_unique_id  # Get the unique_id
+
+            return dc_id, file_type, file_unique_id
+        except Exception as e:
+            LOGGER.warning(f"Failed to fetch telegram info: {e}")
+            return None, None, None
+
     async def _fetch_telegram_file_info(self, encoded_id):
         """
         Fetch file info from Telegram if missing in DB.
@@ -161,25 +287,25 @@ class Database:
             decoded = await decode_string(encoded_id)
             chat_id = int(f"-100{decoded['chat_id']}")
             msg_id = int(decoded['msg_id'])
-            
-            # Use the injected client (load balancing handled by client pool if implemented there, 
+
+            # Use the injected client (load balancing handled by client pool if implemented there,
             # but here we just use the main bot instance passed in)
             client = self.bot_client
-            
+
             try:
                 message = await client.get_messages(chat_id, msg_id)
             except FloodWait as e:
                 LOGGER.warning(f"FloodWait {e.value}s on fetch_info. Sleeping...")
                 await asyncio.sleep(e.value)
                 message = await client.get_messages(chat_id, msg_id)
-                    
+
             if not message or message.empty:
                 return None, None
-                
+
             file = message.video or message.document
             if not file:
                 return None, None
-            
+
             # Extract dc_id from file_id
             try:
                 file_id_obj = FileId.decode(file.file_id)
@@ -187,7 +313,7 @@ class Database:
             except Exception as e:
                 LOGGER.warning(f"Failed to extract dc_id: {e}")
                 dc_id = None
-                
+
             file_type = "video" if message.video else "document"
             return dc_id, file_type
         except Exception as e:
@@ -334,7 +460,7 @@ class Database:
     async def insert_media(
         self, metadata_info: dict,
         channel: int, msg_id: int, size: str, name: str,
-        dc_id: int = None, file_type: str = "video"
+        dc_id: int = None, file_type: str = "video", file_unique_id: str = None
     ) -> Optional[ObjectId]:
         
         if metadata_info['media_type'] == "movie":
@@ -359,7 +485,8 @@ class Database:
                     name=name,
                     size=size,
                     dc_id=dc_id,
-                    file_type=file_type
+                    file_type=file_type,
+                    file_unique_id=file_unique_id
                 )]
             )
             return await self.update_movie(media)
@@ -393,7 +520,8 @@ class Database:
                             name=name,
                             size=size,
                             dc_id=dc_id,
-                            file_type=file_type
+                            file_type=file_type,
+                            file_unique_id=file_unique_id
                         )]
                     )]
                 )]
@@ -1272,7 +1400,7 @@ class Database:
         # We need to group by the "conflict slot"
         skip = (page - 1) * page_size
         collection = self.dbs["tracking"]["pending_updates"]
-        
+
         pipeline = [
             # 1. Group by slot
             {
@@ -1306,11 +1434,7 @@ class Database:
                 }
             }
         ]
-        
-        # We need to be careful with "Auto-resolve" logic from previous code.
-        # The previous code iterated and checked for "Active File". If missing -> Auto-resolve.
-        # We can do this AFTER fetching the page.
-        
+
         try:
             agg_result = await collection.aggregate(pipeline).to_list(None)
         except Exception as e:
@@ -1319,17 +1443,17 @@ class Database:
 
         if not agg_result:
             return [], 0
-            
+
         result_data = agg_result[0]["data"]
         total = agg_result[0]["metadata"][0]["total"] if agg_result[0]["metadata"] else 0
-        
+
         enriched = []
-        
+
         for item in result_data:
             # Reconstruct a flat-ish object but with candidates
             # The UI expects top-level fields: media_type, quality, season, etc.
             group_key = item["_id"]
-            
+
             doc = {
                 "_id": str(item["doc_id"]), # Representative ID (mostly for unique key in UI loops)
                 "tmdb_id": group_key["tmdb_id"],
@@ -1340,63 +1464,80 @@ class Database:
                 "metadata": item["metadata"],
                 "candidates": []
             }
-            
+
             # Fetch active info ONCE for this group
-            # We can use the first candidate to convert to objectid format if needed, 
-            # but get_active_file_info uses dict.
-            
-            # Helper needs a dict with tmdb_id, media_type, etc.
-            # We can pass `doc` itself as it has the keys.
             old_file = await self._get_active_file_info_internal(doc)
             doc["old_file"] = old_file
-            
-            # Auto-resolve checks
+
+            # Auto-resolve checks with enhanced logic
             if old_file is None:
-                # If no current file, auto-accept the BEST/FIRST candidate?
-                # Previous logic: "accepting new file" (first one encountered).
-                # We will take the first candidate from the list.
+                # If no current file, auto-accept the BEST/FIRST candidate
                 candidate_to_accept = item["candidates"][0]
                 LOGGER.info(f"Auto-resolving pending update group {group_key}: Current file not found, accepting first candidate.")
                 await self.resolve_pending_update(str(candidate_to_accept["_id"]), "keep_new")
-                # Do not add to enriched, as it's resolved.
-                # Note: This messes up page size count slightly (returns fewer than 20), but that's fine for now.
                 continue
-                
-            # Double Extension Auto-Fix logic (check all candidates?)
-            # Previous logic checked 1-to-1.
-            # Here we might have multiple. We should filter candidates?
-            # If a candidate is just a rename of old_file, we might auto-resolve IT.
-            # But wait, "resolve" with "keep_new" deletes others.
-            # If we have 3 candidates, and Candidate A is "rename fix", 
-            # if we accept A, B and C are deleted. Is that desired? 
-            # Probably yes, B and C are duplicates too.
-            
+
+            # Enhanced auto-resolution logic
             final_candidates = []
             group_resolved = False
-            
+
             old_name = old_file.get("file_name", "") or old_file.get("name", "")
             old_size = old_file.get("file_size", 0) or old_file.get("size", 0)
-            
+            old_type = old_file.get("file_type", "video")
+            old_dc = old_file.get("dc_id")
+
             for cand in item["candidates"]:
                 cand_doc = convert_objectid_to_str(cand)
                 new_file = cand_doc["new_file"]
                 new_name = new_file.get("file_name", "") or new_file.get("name", "")
                 new_size = new_file.get("file_size", 0) or new_file.get("size", 0)
-                
+                new_type = new_file.get("file_type", "video")
+                new_dc = new_file.get("dc_id")
+
                 # Check double extension fix
                 if old_name.endswith(".mkv.mkv") and new_name == old_name[:-4] and old_size == new_size:
                      LOGGER.info(f"Auto-resolving double extension fix {cand_doc['_id']}: Replacing {old_name} with {new_name}")
                      await self.resolve_pending_update(str(cand_doc["_id"]), "keep_new")
                      group_resolved = True
                      break
-                
+
+                # Use the same logic as _should_delete_existing for consistency
+                # Create temporary file objects to use the function
+                temp_old_file = {
+                    "file_unique_id": old_file.get("file_unique_id"),
+                    "file_type": old_type,
+                    "dc_id": old_dc
+                }
+                temp_new_file = {
+                    "file_unique_id": new_file.get("file_unique_id"),
+                    "file_type": new_type,
+                    "dc_id": new_dc
+                }
+
+                should_delete_existing = _should_delete_existing(temp_old_file, temp_new_file)
+
+                if should_delete_existing:
+                    # Delete existing, keep new
+                    LOGGER.info(f"Auto-resolving: Preferring new file over existing: {new_name}")
+                    await self.resolve_pending_update(str(cand_doc["_id"]), "keep_new")
+                    group_resolved = True
+                    break
+                else:
+                    # Keep existing, reject new
+                    LOGGER.info(f"Auto-resolving: Keeping existing file over new: {old_name}")
+                    await self.resolve_pending_update(str(cand_doc["_id"]), "keep_old")
+                    continue  # Continue to check other candidates
+
+                # If same type and same DC status, add to candidates for manual review
                 final_candidates.append(cand_doc)
-            
+
             if group_resolved:
                 continue
-                
+
             doc["candidates"] = final_candidates
-            enriched.append(doc)
+            # Only add to results if there are unresolved candidates
+            if final_candidates:
+                enriched.append(doc)
 
         return enriched, total
 
@@ -1405,20 +1546,22 @@ class Database:
         tmdb_id = info_dict.get("tmdb_id")
         media_type = info_dict.get("media_type")
         quality = info_dict.get("quality")
-        
+
         total_storage_dbs = len(self.dbs) - 1
         found_doc = None
-        
+        found_db_key = None
+
         for i in range(1, total_storage_dbs + 1):
             db_key = f"storage_{i}"
             col_name = "movie" if media_type == "movie" else "tv"
             found_doc = await self.dbs[db_key][col_name].find_one({"tmdb_id": tmdb_id})
             if found_doc:
+                found_db_key = db_key
                 break
-        
+
         if not found_doc:
             return None
-            
+
         # Extract quality info
         updated_db = False
         target_q = None
@@ -1428,32 +1571,33 @@ class Database:
             for q in telegram_files:
                 if q.get("quality") == quality:
                     target_q = q
-                    # Check if missing info
-                    if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown":
-                        dc, ftype = await self._fetch_telegram_file_info(q.get("id"))
-                        if dc or ftype:
+                    # Check if missing info (including file_unique_id)
+                    if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown" or not q.get("file_unique_id"):
+                        dc, ftype, unique_id = await self._fetch_telegram_file_info_with_unique_id(q.get("id"))
+                        if dc or ftype or unique_id:
                             if dc: q["dc_id"] = dc
                             if ftype: q["file_type"] = ftype
+                            if unique_id: q["file_unique_id"] = unique_id
                             updated_db = True
                     break # Found the quality we wanted
-            
+
             if updated_db:
                 try:
-                    await self.dbs[db_key]["movie"].update_one(
+                    await self.dbs[found_db_key]["movie"].update_one(
                         {"_id": found_doc["_id"]},
                         {"$set": {"telegram": telegram_files}}
                     )
                     LOGGER.info(f"Backfilled metadata for movie {found_doc.get('title')} ({quality})")
                 except Exception as e:
                     LOGGER.error(f"Failed to backfill metadata: {e}")
-                    
+
             return target_q
 
         else: # TV
             sn = info_dict.get("season")
             en = info_dict.get("episode")
             seasons = found_doc.get("seasons", [])
-            
+
             for season in seasons:
                 if season.get("season_number") == sn:
                     for episode in season.get("episodes", []):
@@ -1462,20 +1606,21 @@ class Database:
                             for q in telegram_files:
                                 if q.get("quality") == quality:
                                     target_q = q
-                                    # Check missing info
-                                    if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown":
-                                        dc, ftype = await self._fetch_telegram_file_info(q.get("id"))
-                                        if dc or ftype:
+                                    # Check if missing info (including file_unique_id)
+                                    if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown" or not q.get("file_unique_id"):
+                                        dc, ftype, unique_id = await self._fetch_telegram_file_info_with_unique_id(q.get("id"))
+                                        if dc or ftype or unique_id:
                                             if dc: q["dc_id"] = dc
                                             if ftype: q["file_type"] = ftype
+                                            if unique_id: q["file_unique_id"] = unique_id
                                             updated_db = True
                                     break
                             break
                     break
-            
+
             if updated_db:
                 try:
-                    await self.dbs[db_key]["tv"].update_one(
+                    await self.dbs[found_db_key]["tv"].update_one(
                         {"_id": found_doc["_id"]},
                         {"$set": {"seasons": seasons}}
                     )
@@ -1484,7 +1629,7 @@ class Database:
                     LOGGER.error(f"Failed to backfill metadata TV: {e}")
 
             return target_q
-        
+
         return None
 
     async def resolve_pending_update(self, pending_id_str: str, decision: str):
@@ -1681,10 +1826,11 @@ class Database:
                     winner_quality = QualityDetail(
                         quality=winner["quality"],
                         id=winner_file["id"],
-                        name=winner_file["name"], 
+                        name=winner_file["name"],
                         size=winner_file["size"],
                         dc_id=winner_file.get("dc_id"),
-                        file_type=winner_file.get("file_type", "video")
+                        file_type=winner_file.get("file_type", "video"),
+                        file_unique_id=winner_file.get("file_unique_id")
                     )
                     
                     movie_schema = MovieSchema(
@@ -1712,7 +1858,8 @@ class Database:
                         name=winner_file["name"],
                         size=winner_file["size"],
                         dc_id=winner_file.get("dc_id"),
-                        file_type=winner_file.get("file_type", "video")
+                        file_type=winner_file.get("file_type", "video"),
+                        file_unique_id=winner_file.get("file_unique_id")
                     )
                     
                     episode_schema = Episode(
@@ -1776,7 +1923,7 @@ class Database:
             # In insert_media/update_movie:
             # Input is QualityDetail (dict in pydantic).
             # new_file stored in pending_doc IS the QualityDetail dict.
-            
+
             # We need to construct the full Schema
             result = None
             if new_metadata["media_type"] == "movie":
@@ -1787,7 +1934,8 @@ class Database:
                     name=file_info["name"],
                     size=file_info["size"],
                     dc_id=file_info.get("dc_id"),
-                    file_type=file_info.get("file_type", "video")
+                    file_type=file_info.get("file_type", "video"),
+                    file_unique_id=file_info.get("file_unique_id")
                 )
                 
                 movie_schema = MovieSchema(
@@ -1821,7 +1969,8 @@ class Database:
                     name=file_info["name"],
                     size=file_info["size"],
                     dc_id=file_info.get("dc_id"),
-                    file_type=file_info.get("file_type", "video")
+                    file_type=file_info.get("file_type", "video"),
+                    file_unique_id=file_info.get("file_unique_id")
                 )
                 
                 ep_num = pending_doc["episode"]
@@ -2191,4 +2340,5 @@ class Database:
             enriched.append(doc)
 
         return enriched, total
+
 

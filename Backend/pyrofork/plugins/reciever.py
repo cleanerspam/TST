@@ -18,9 +18,9 @@ db_lock = Lock()
 
 async def process_file():
     while True:
-        metadata_info, channel, msg_id, size, title, dc_id, file_type = await file_queue.get()
+        metadata_info, channel, msg_id, size, title, dc_id, file_type, file_unique_id = await file_queue.get()
         async with db_lock:
-            updated_id = await db.insert_media(metadata_info, channel=channel, msg_id=msg_id, size=size, name=title, dc_id=dc_id, file_type=file_type)
+            updated_id = await db.insert_media(metadata_info, channel=channel, msg_id=msg_id, size=size, name=title, dc_id=dc_id, file_type=file_type, file_unique_id=file_unique_id)
             if updated_id:
                 LOGGER.info(f"{metadata_info['media_type']} updated with ID: {updated_id}")
             else:
@@ -66,10 +66,13 @@ async def file_receive_handler(client: Client, message: Message):
                 except Exception as e:
                     LOGGER.warning(f"Failed to extract dc_id: {e}")
                     dc_id = None
-                    
+
                 file_type = "video" if message.video else "document"
 
-                await file_queue.put((metadata_info, int(channel), msg_id, size, title, dc_id, file_type))
+                # Extract file_unique_id
+                file_unique_id = file.file_unique_id
+
+                await file_queue.put((metadata_info, int(channel), msg_id, size, title, dc_id, file_type, file_unique_id))
             else:
                 await message.reply_text("> Not supported")
         except FloodWait as e:
