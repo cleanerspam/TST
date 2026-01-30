@@ -2341,29 +2341,26 @@ class Database:
         self.active_tasks[task_id]["status"] = "completed"
         self.active_tasks[task_id]["details"] = "All operations completed."
         self.active_tasks[task_id]["failed"] = failed
-
-        # Cleanup task data after some time?
-        # Cleanup old task data to prevent memory leaks
-        await self.cleanup_old_tasks()
+        self.active_tasks[task_id]["completed_at"] = datetime.utcnow()  # Track when task completed
 
     async def cleanup_old_tasks(self):
         """
         Clean up old task data to prevent memory leaks.
-        Removes tasks that are older than 24 hours.
+        Only removes completed tasks that have been completed for more than 24 hours.
+        Keeps running tasks and recently completed tasks regardless of age.
         """
         from datetime import datetime, timedelta
 
-        # Remove tasks older than 24 hours
+        # Remove completed tasks that were completed more than 24 hours ago
         cutoff_time = datetime.utcnow() - timedelta(hours=24)
 
-        # Find tasks to remove
+        # Find tasks to remove - only remove completed tasks that were completed long ago
         tasks_to_remove = []
         for task_id, task_data in self.active_tasks.items():
-            # Assuming task_data contains a timestamp, if not, we'll remove based on age
-            # For now, we'll just clean up completed tasks that are old
-            if task_data.get("status") == "completed":
-                # We don't have a timestamp in the current structure, so we'll just keep this simple
-                # and remove completed tasks periodically
+            # Only remove completed tasks that were completed more than 24 hours ago
+            if (task_data.get("status") == "completed" and
+                "completed_at" in task_data and
+                task_data["completed_at"] < cutoff_time):
                 tasks_to_remove.append(task_id)
 
         # Remove old tasks
