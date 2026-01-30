@@ -23,12 +23,22 @@
             background: rgba(100, 100, 100, 0.8);
         }
     </style>
-    <div class="flex justify-between items-center mb-8">
-        <h1 class="text-3xl font-bold text-primary">Pending Updates</h1>
-        <button onclick="window.location.reload()"
-            class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
-            <i class="fas fa-sync-alt"></i> <span>Refresh</span>
-        </button>
+    <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
+        <div>
+            <h1 class="text-3xl font-bold text-primary">Pending Updates</h1>
+            <p class="theme-text-secondary mt-1">Resolve quality conflicts and handle duplicates</p>
+        </div>
+        <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+            <div class="relative w-full sm:w-64">
+                <input type="text" id="search-input" placeholder="Search duplicates by title..."
+                    class="w-full bg-black/20 border border-white/10 rounded-lg pl-10 pr-4 py-2 theme-text focus:outline-none focus:border-primary transition-colors">
+                <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
+            </div>
+            <button onclick="clearSearch()"
+                class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
+                <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
+            </button>
+        </div>
     </div>
 
     <!-- Loading State -->
@@ -220,8 +230,38 @@
     let hasMore = true;
     let selections = {};
     let groupSelections = {};
+    let currentSearchQuery = null;
 
-    document.addEventListener('DOMContentLoaded', () => loadUpdates());
+    document.addEventListener('DOMContentLoaded', () => {
+        loadUpdates();
+
+        // Add event listener for search input
+        const searchInput = document.getElementById('search-input');
+        searchInput.addEventListener('keyup', function(event) {
+            if (event.key === 'Enter') {
+                performSearch();
+            }
+        });
+
+        // Also add event listener for search button clicks (for non-enter key searches)
+        searchInput.addEventListener('input', debounce(function() {
+            // Optionally, we could implement live search with delay
+            // For now, we'll just rely on Enter key and explicit search button
+        }, 500));
+    });
+
+    // Debounce function to limit how often a function is called
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
 
     function showToast(message, type = 'success') {
         // Create toast element on the fly if it doesn't exist for simplicity, 
@@ -266,6 +306,11 @@
     async function loadUpdates() {
         if (isLoading || !hasMore) return;
 
+        // If we're currently in search mode, don't load regular updates
+        if (currentSearchQuery !== null) {
+            return;
+        }
+
         isLoading = true;
 
         if (currentPage === 1) {
@@ -283,6 +328,11 @@
                 document.getElementById('load-more-btn').classList.add('hidden');
             } else {
                 document.getElementById('load-more-btn').classList.remove('hidden');
+            }
+
+            if (currentPage === 1) {
+                // Clear grid only on first page load
+                document.getElementById('updates-grid').innerHTML = '';
             }
 
             renderUpdates(data.results);
@@ -309,7 +359,11 @@
     }
 
     function loadMore() {
-        loadUpdates();
+        if (currentSearchQuery) {
+            loadSearchResults();
+        } else {
+            loadUpdates();
+        }
     }
 
     function renderUpdates(items) {
@@ -662,16 +716,32 @@
                 showToast(data.message || 'Deleted successfully');
                 // Remove the card from UI
                 // We need to find the card ID via the pending ID... or refresh.
-                // Since we don't have the card ID passed directly to this func without extra work, 
+                // Since we don't have the card ID passed directly to this func without extra work,
                 // and the pending ID might be just one of many, reloading or hiding might be tricky.
                 // But we know 'item.candidates[0]._id' was used.
-                // The 'item._id' was used for the card ID. 
+                // The 'id' was used for the card ID.
                 // Wait, simpler: reload the list or find the card that contains this pending ID.
                 // Ideally, we just reloadUpdates or refresh the page.
-                setTimeout(() => loadUpdates(), 1000); // Reload to reflect changes
+
+                // Preserve search state if applicable
+                setTimeout(() => {
+                    if (currentSearchQuery) {
+                        // Reload search results
+                        document.getElementById('updates-grid').innerHTML = '';
+                        currentPage = 1;
+                        hasMore = true;
+                        loadSearchResults();
+                    } else {
+                        // Reload regular updates
+                        document.getElementById('updates-grid').innerHTML = '';
+                        currentPage = 1;
+                        hasMore = true;
+                        loadUpdates();
+                    }
+                }, 1000); // Reload to reflect changes
+
                 // Or remove card if we can identify it.
                 // Let's just reload for safety to ensure state is clean.
-                window.location.reload();
             } else {
                 showToast(data.detail || 'Failed to delete', 'error');
             }
@@ -708,6 +778,25 @@
                 if (status.status === 'completed' || status.status === 'failed') {
                     clearInterval(pollInterval);
                     document.getElementById('progress-done-btn').classList.remove('hidden');
+
+                    // Refresh the view after completion
+                    if (status.status === 'completed') {
+                        setTimeout(() => {
+                            if (currentSearchQuery) {
+                                // Reload search results
+                                document.getElementById('updates-grid').innerHTML = '';
+                                currentPage = 1;
+                                hasMore = true;
+                                loadSearchResults();
+                            } else {
+                                // Reload regular updates
+                                document.getElementById('updates-grid').innerHTML = '';
+                                currentPage = 1;
+                                hasMore = true;
+                                loadUpdates();
+                            }
+                        }, 1500); // Delay to allow DB to update
+                    }
                 }
 
             } catch (e) {
@@ -718,6 +807,89 @@
 
     function pad(num) {
         return num.toString().padStart(2, '0');
+    }
+
+    async function performSearch() {
+        const searchInput = document.getElementById('search-input');
+        const query = searchInput.value.trim();
+
+        if (!query) {
+            // If search is empty, load all updates
+            currentSearchQuery = null;
+            resetPagination();
+            loadUpdates();
+            return;
+        }
+
+        currentSearchQuery = query;
+        resetPagination();
+        await loadSearchResults();
+    }
+
+    async function loadSearchResults() {
+        if (isLoading || !hasMore) return;
+
+        isLoading = true;
+
+        if (currentPage === 1) {
+            document.getElementById('loading').classList.remove('hidden');
+        } else {
+            document.getElementById('load-more-btn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        }
+
+        try {
+            const response = await fetch(`/api/admin/updates/search_duplicates?query=${encodeURIComponent(currentSearchQuery)}&page=${currentPage}&page_size=20`);
+            const data = await response.json();
+
+            if (data.results.length < 20) {
+                hasMore = false;
+                document.getElementById('load-more-btn').classList.add('hidden');
+            } else {
+                document.getElementById('load-more-btn').classList.remove('hidden');
+            }
+
+            if (currentPage === 1) {
+                // Clear grid only on first page load for search
+                document.getElementById('updates-grid').innerHTML = '';
+            }
+
+            renderUpdates(data.results);
+
+            const currentCount = document.getElementById('updates-grid').children.length;
+            const totalCount = data.total;
+            const countEl = document.getElementById('load-count');
+            if (countEl) countEl.textContent = `${currentCount} out of ${totalCount} matches found`;
+
+            currentPage++;
+
+        } catch (error) {
+            console.error('Error fetching search results:', error);
+            showToast('Failed to load search results', 'error');
+        } finally {
+            isLoading = false;
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('load-more-btn').innerHTML = 'Load More';
+
+            if (currentPage === 2 && document.getElementById('updates-grid').children.length === 0) {
+                document.getElementById('empty-state').classList.remove('hidden');
+            }
+        }
+    }
+
+    function resetPagination() {
+        currentPage = 1;
+        hasMore = true;
+        document.getElementById('load-more-btn').classList.add('hidden');
+        document.getElementById('load-count').textContent = '';
+        document.getElementById('empty-state').classList.add('hidden');
+    }
+
+    function clearSearch() {
+        document.getElementById('search-input').value = '';
+        currentSearchQuery = null;
+        resetPagination();
+        document.getElementById('updates-grid').innerHTML = '';
+        loadUpdates();
     }
 
     let wizardState = {
@@ -892,13 +1064,18 @@
             if (response.ok) {
                 showToast(data.message, 'success');
                 closeModal();
-                // Refresh grid
+                // Refresh grid - preserve search state if applicable
                 selections = {};
                 updateBulkBar();
                 document.getElementById('updates-grid').innerHTML = '';
                 currentPage = 1;
                 hasMore = true;
-                loadUpdates();
+
+                if (currentSearchQuery) {
+                    loadSearchResults();
+                } else {
+                    loadUpdates();
+                }
             } else {
                 showToast(data.detail || 'Update failed', 'error');
                 loader.classList.add('hidden'); // Only hide if failed, otherwise modal closes

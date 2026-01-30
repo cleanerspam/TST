@@ -326,5 +326,24 @@ async def get_task_status_route(
     status = db.get_task_status(task_id)
     if not status:
         raise HTTPException(status_code=404, detail="Task not found")
-        
+
     return status
+
+
+@router.get("/updates/search_duplicates")
+async def search_duplicates_route(
+    query: str = Query(..., min_length=1),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Search for duplicate blocks in pending updates.
+    """
+    results, total = await db.search_pending_updates(query, page, page_size)
+    return {
+        "results": results,
+        "total": total,
+        "page": page,
+        "page_size": page_size
+    }

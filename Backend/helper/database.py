@@ -2053,3 +2053,98 @@ class Database:
             # Wait 24 hours before next check
             await asyncio.sleep(86400)
 
+    async def search_pending_updates(self, query: str, page: int = 1, page_size: int = 20):
+        """
+        Search for pending updates by title (case-insensitive).
+        """
+        skip = (page - 1) * page_size
+        collection = self.dbs["tracking"]["pending_updates"]
+
+        # Case-insensitive search in metadata title
+        search_query = {
+            "metadata.title": {
+                "$regex": query,
+                "$options": "i"  # Case insensitive
+            }
+        }
+
+        pipeline = [
+            {"$match": search_query},
+            # 1. Group by slot (similar to get_pending_updates)
+            {
+                "$group": {
+                    "_id": {
+                        "tmdb_id": "$tmdb_id",
+                        "media_type": "$media_type",
+                        "quality": "$quality",
+                        "season": "$season",   # will be null for movies
+                        "episode": "$episode"  # will be null for movies
+                    },
+                    "doc_id": {"$first": "$_id"}, # Keep one ID for reference/sorting
+                    "metadata": {"$first": "$metadata"}, # Keep common metadata
+                    "created_at": {"$max": "$created_at"}, # Use latest creation
+                    "candidates": {
+                        "$push": {
+                            "_id": "$_id",
+                            "new_file": "$new_file",
+                            "created_at": "$created_at"
+                        }
+                    }
+                }
+            },
+            # 2. Sort by most recent
+            {"$sort": {"created_at": -1}},  # Changed to sort by most recent first
+            # 3. Facet for pagination
+            {
+                "$facet": {
+                    "metadata": [{"$count": "total"}],
+                    "data": [{"$skip": skip}, {"$limit": page_size}]
+                }
+            }
+        ]
+
+        try:
+            agg_result = await collection.aggregate(pipeline).to_list(None)
+        except Exception as e:
+            LOGGER.error(f"Search aggregation failed: {e}")
+            return [], 0
+
+        if not agg_result:
+            return [], 0
+
+        result_data = agg_result[0]["data"]
+        total = agg_result[0]["metadata"][0]["total"] if agg_result[0]["metadata"] else 0
+
+        enriched = []
+
+        for item in result_data:
+            # Reconstruct a flat-ish object but with candidates
+            group_key = item["_id"]
+
+            doc = {
+                "_id": str(item["doc_id"]), # Representative ID
+                "tmdb_id": group_key["tmdb_id"],
+                "media_type": group_key["media_type"],
+                "quality": group_key["quality"],
+                "season": group_key.get("season"),
+                "episode": group_key.get("episode"),
+                "metadata": item["metadata"],
+                "candidates": []
+            }
+
+            # Fetch active info for this group
+            old_file = await self._get_active_file_info_internal(doc)
+
+            doc["old_file"] = old_file
+
+            # Skip auto-resolution checks for search results - we want to show all matches
+            final_candidates = []
+            for cand in item["candidates"]:
+                cand_doc = convert_objectid_to_str(cand)
+                final_candidates.append(cand_doc)
+
+            doc["candidates"] = final_candidates
+            enriched.append(doc)
+
+        return enriched, total
+
