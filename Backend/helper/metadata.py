@@ -65,7 +65,18 @@ def extract_default_id(url: str) -> str | None:
     # TMDb movie or TV
     tmdb_match = re.search(r'/((movie|tv))/(\d+)', url)
     if tmdb_match:
-        return tmdb_match.group(3)
+        tmdb_id_str = tmdb_match.group(3)
+        try:
+            tmdb_id = int(tmdb_id_str)
+            # Validate that the TMDb ID is within a reasonable range
+            # TMDb movie IDs are currently under ~900,000 and TV IDs under ~200,000 as of 2026
+            if 1 <= tmdb_id <= 10000000:  # Reasonable upper bound for both movies and TV shows
+                return tmdb_id_str
+            else:
+                LOGGER.warning(f"Extracted TMDb ID {tmdb_id} is out of reasonable range, ignoring")
+                return None
+        except ValueError:
+            return None
 
     return None
 
