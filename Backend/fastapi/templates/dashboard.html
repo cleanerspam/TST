@@ -1240,10 +1240,10 @@
                         clearInterval(workloadsInterval);
                         clearInterval(statsInterval);
 
-                        showToast('Server restarting... Auto-refresh paused for 3 minutes.');
+                        showToast('Server restarting... Auto-refresh paused for 2 minutes.');
 
-                        // Wait 3 minutes (180000ms) before reloading
-                        setTimeout(() => window.location.reload(), 180000);
+                        // Wait 2 minutes (120000ms) before reloading
+                        setTimeout(() => window.location.reload(), 120000);
                     }
                 }
             } else {

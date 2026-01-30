@@ -90,74 +90,87 @@ async def delete_message(chat_id: int, msg_id: int):
 async def delete_multiple_messages(messages: list):
     """
     Delete multiple messages in parallel using available bots.
+    Implements round-robin distribution with batches of up to 30 messages per bot.
     Args:
         messages: List of tuples (chat_id, msg_id)
     """
     import asyncio
-    
+    from collections import defaultdict
+
     if not messages:
         return
-        
-    # Group by chat_id
-    # {chat_id: [msg_id1, msg_id2, ...]}
-    grouped = {}
-    for chat_id, msg_id in messages:
-        if chat_id not in grouped:
-            grouped[chat_id] = []
-        grouped[chat_id].append(msg_id)
-    
-    tasks = []
-    
-    # We will distribute deletion tasks.
-    # Since Pyrogram delete_messages accepts a list of IDs for a chat, 
-    # we can just use that feature for efficiency if the bot allows it.
-    # However, we need to handle permissions/FloodWait.
-    # We can reuse 'delete_message' logic but adapted for batch?
-    # Or simplified: Pick a client, try to delete ALL messages for that chat.
-    
-    # Strategy:
-    # For each chat, spawn a task that tries to delete the batch of IDs.
-    # Use load balancing logic similar to delete_message but for the whole batch.
-    
-    async def delete_batch_for_chat(c_id, m_ids):
-        # Retry logic similar to delete_message
-        client_count = len(multi_clients) + 1 if multi_clients else 1
-        max_retries = client_count # Iterate through all bots exactly once
-        
-        # Split into chunks of 100 to be safe (Telegram limit)
-        # Actually Pyrogram handles this? Best to be safe.
-        chunk_size = 100
-        chunks = [m_ids[i:i + chunk_size] for i in range(0, len(m_ids), chunk_size)]
-        
-        for chunk in chunks:
-            success = False
-            for attempt in range(max_retries):
-                client = get_next_client()
-                try:
-                    await client.delete_messages(chat_id=c_id, message_ids=chunk)
-                    success = True
-                    LOGGER.info(f"Deleted {len(chunk)} messages in {c_id} using {client.name}")
-                    break
-                except FloodWait as e:
-                    LOGGER.warning(f"FloodWait {e.value}s in batch delete {c_id} using {client.name}")
-                    if attempt >= max_retries - 1:
-                         await sleep(e.value + 1)
-                         try:
-                             await client.delete_messages(chat_id=c_id, message_ids=chunk)
-                             success = True
-                         except Exception as final_e:
-                             LOGGER.error(f"Failed batch delete in {c_id} after FloodWait: {final_e}")
-                    continue
-                except Exception as e:
-                    LOGGER.error(f"Batch delete error in {c_id} using {client.name}: {e}")
-                    continue
-            
-            if not success:
-                LOGGER.error(f"Failed to delete batch of {len(chunk)} messages in {c_id}")
 
-    for chat_id, msg_ids in grouped.items():
-        tasks.append(delete_batch_for_chat(chat_id, msg_ids))
-        
+    # Group messages by chat_id first
+    grouped_by_chat = defaultdict(list)
+    for chat_id, msg_id in messages:
+        grouped_by_chat[chat_id].append(msg_id)
+
+    # Flatten all messages to distribute among bots in round-robin fashion
+    all_messages = [(chat_id, msg_id) for chat_id, msg_ids in grouped_by_chat.items() for msg_id in msg_ids]
+
+    # Group messages by bot in round-robin fashion
+    bot_message_groups = defaultdict(list)
+
+    # Create a cycle of available clients
+    clients_cycle = cycle(list(multi_clients.values()) + [Helper] if multi_clients else [Helper])
+
+    for chat_id, msg_id in all_messages:
+        client = next(clients_cycle)  # Round-robin assignment
+        bot_message_groups[client.name].append((chat_id, msg_id))
+
+    # Process each bot's assigned messages in batches of up to 30
+    async def process_bot_messages(bot_name, message_list):
+        # Group messages by chat_id within this bot's batch
+        bot_grouped = defaultdict(list)
+        for chat_id, msg_id in message_list:
+            bot_grouped[chat_id].append(msg_id)
+
+        # Process each chat's messages in batches of up to 30
+        for chat_id, msg_ids in bot_grouped.items():
+            # Split into batches of 30
+            batch_size = 30
+            for i in range(0, len(msg_ids), batch_size):
+                chunk = msg_ids[i:i + batch_size]
+
+                # Find the appropriate client for this batch
+                clients_list = list(multi_clients.values()) + [Helper] if multi_clients else [Helper]
+                target_client = next((c for c in clients_list if c.name == bot_name), Helper)
+
+                # Attempt deletion with retries
+                max_retries = max(len(multi_clients), 3) if multi_clients else 3
+                success = False
+
+                for attempt in range(max_retries):
+                    try:
+                        await target_client.delete_messages(chat_id=chat_id, message_ids=chunk)
+                        success = True
+                        LOGGER.info(f"Deleted {len(chunk)} messages in {chat_id} using {target_client.name}")
+                        break
+                    except FloodWait as e:
+                        wait_time = e.value
+                        LOGGER.warning(f"FloodWait {wait_time}s in batch delete {chat_id} using {target_client.name}")
+                        if attempt >= max_retries - 1:
+                            await sleep(wait_time + 1)
+                            try:
+                                await target_client.delete_messages(chat_id=chat_id, message_ids=chunk)
+                                success = True
+                            except Exception as final_e:
+                                LOGGER.error(f"Failed batch delete in {chat_id} after FloodWait: {final_e}")
+                        else:
+                            await sleep(wait_time)
+                    except Exception as e:
+                        LOGGER.error(f"Batch delete error in {chat_id} using {target_client.name}: {e}")
+                        # Try next client on failure
+                        target_client = get_next_client()
+
+                if not success:
+                    LOGGER.error(f"Failed to delete batch of {len(chunk)} messages in {chat_id} after {max_retries} attempts")
+
+    # Create tasks for each bot's message group
+    tasks = []
+    for bot_name, message_list in bot_message_groups.items():
+        tasks.append(process_bot_messages(bot_name, message_list))
+
     if tasks:
         await asyncio.gather(*tasks)
 

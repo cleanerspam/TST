@@ -1581,6 +1581,7 @@ class Database:
     # ---------------------------
 
     async def get_pending_updates(self, page: int = 1, page_size: int = 20):
+        import asyncio
         # We need to group by the "conflict slot"
         skip = (page - 1) * page_size
         collection = self.dbs["tracking"]["pending_updates"]
@@ -1609,7 +1610,7 @@ class Database:
                 }
             },
             # 2. Sort by most recent
-            {"$sort": {"created_at": 1}},
+            {"$sort": {"created_at": 1}},  # Sort by oldest first for consistent pagination
             # 3. Facet for pagination
             {
                 "$facet": {
@@ -1633,6 +1634,77 @@ class Database:
 
         enriched = []
 
+        # Backfill metadata for the 100 oldest items that have missing fields to improve performance
+        # First, get pending updates that have missing metadata fields to backfill them
+        try:
+            # Find items that likely have missing metadata by checking for incomplete records
+            # This query finds items that need backfilling (ones with missing dc_id, file_type, or file_unique_id in candidates)
+            # We'll use a more efficient approach by checking for items that need metadata
+            oldest_pending_cursor = collection.find({}).sort("created_at", 1).limit(100)
+            oldest_pending = await oldest_pending_cursor.to_list(length=100)
+
+            # Create tasks for backfilling metadata in parallel for the oldest items that need it
+            async def backfill_oldest_item(item):
+                doc = {
+                    "tmdb_id": item.get("tmdb_id"),
+                    "media_type": item.get("media_type"),
+                    "quality": item.get("quality"),
+                    "season": item.get("season"),
+                    "episode": item.get("episode"),
+                    "metadata": item.get("metadata"),
+                    "candidates": []
+                }
+                # Pre-fetch active info for this group to backfill metadata
+                await self._get_active_file_info_internal(doc)
+
+            # Run backfill tasks in parallel for oldest items
+            if oldest_pending:
+                # Limit concurrency more conservatively for database safety
+                semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent backfills
+
+                async def limited_backfill_oldest(item):
+                    async with semaphore:
+                        return await backfill_oldest_item(item)
+
+                oldest_backfill_tasks = [limited_backfill_oldest(item) for item in oldest_pending]
+                await asyncio.gather(*oldest_backfill_tasks, return_exceptions=True)
+
+        except Exception as e:
+            LOGGER.error(f"Error during oldest items backfill: {e}")
+
+        # Backfill metadata for items on this page to improve performance
+        # Process only the items that will be displayed on this page
+        items_to_process = result_data  # Process only the items that will be shown on this page
+
+        # Create tasks for backfilling metadata in parallel
+        async def backfill_item(item):
+            group_key = item["_id"]
+            doc = {
+                "_id": str(item["doc_id"]),
+                "tmdb_id": group_key["tmdb_id"],
+                "media_type": group_key["media_type"],
+                "quality": group_key["quality"],
+                "season": group_key.get("season"),
+                "episode": group_key.get("episode"),
+                "metadata": item["metadata"],
+                "candidates": []
+            }
+            # Pre-fetch active info for this group to backfill metadata
+            await self._get_active_file_info_internal(doc)
+
+        # Run backfill tasks in parallel
+        if items_to_process:
+            # Limit concurrency more conservatively for database safety
+            semaphore = asyncio.Semaphore(5)  # Limit to 5 concurrent backfills
+
+            async def limited_backfill(item):
+                async with semaphore:
+                    return await backfill_item(item)
+
+            backfill_tasks = [limited_backfill(item) for item in items_to_process]
+            await asyncio.gather(*backfill_tasks, return_exceptions=True)
+
+        # Now process the actual page results
         for item in result_data:
             # Reconstruct a flat-ish object but with candidates
             # The UI expects top-level fields: media_type, quality, season, etc.
@@ -2287,11 +2359,12 @@ class Database:
     async def run_bulk_resolve_background(self, task_id: str, selections: list):
         """
         Background wrapper for bulk resolve to track progress.
+        Optimized to process items in parallel for better performance.
         """
         import asyncio
         from Backend.logger import LOGGER
         from Backend.helper.task_manager import delete_multiple_messages
-        
+
         total = len(selections)
         self.active_tasks[task_id] = {
             "status": "processing",
@@ -2300,43 +2373,72 @@ class Database:
             "details": "Starting...",
             "failed": []
         }
-        
+
         failed = []
         all_deletions = []
-        
+
         LOGGER.info(f"Starting bulk resolve task {task_id} for {total} items")
-        
-        # Phase 1: DB Updates
-        for i, selection in enumerate(selections):
-            pending_id = selection.get("pending_id")
-            action = selection.get("action")
-            
-            try:
-                # Update status
-                self.active_tasks[task_id]["details"] = f"Processing bundle {i+1} of {total}"
-                
-                # Resolve individual update
-                success, msg, local_deletions = await self.resolve_pending_update(pending_id, action)
-                
-                if not success:
-                    failed.append({"id": pending_id, "reason": msg})
-                else:
-                    if local_deletions:
-                        all_deletions.extend(local_deletions)
-                
-                self.active_tasks[task_id]["processed"] = i + 1
-                
-            except Exception as e:
-                LOGGER.error(f"Task {task_id} error on {pending_id}: {e}")
-                failed.append({"id": pending_id, "reason": str(e)})
-                self.active_tasks[task_id]["processed"] = i + 1
-                
+
+        # Phase 1: DB Updates - Process in parallel for better performance
+        semaphore = asyncio.Semaphore(3)  # Limit concurrent operations to prevent overwhelming the system and avoid database issues
+
+        async def process_selection(index, selection):
+            async with semaphore:
+                pending_id = selection.get("pending_id")
+                action = selection.get("action")
+
+                try:
+                    # Resolve individual update
+                    success, msg, local_deletions = await self.resolve_pending_update(pending_id, action)
+
+                    result = {
+                        "index": index,
+                        "success": success,
+                        "msg": msg,
+                        "local_deletions": local_deletions,
+                        "pending_id": pending_id
+                    }
+
+                    # Update progress
+                    self.active_tasks[task_id]["processed"] = index + 1
+                    self.active_tasks[task_id]["details"] = f"Processed {index + 1} of {total}"
+
+                    return result
+                except Exception as e:
+                    LOGGER.error(f"Task {task_id} error on {pending_id}: {e}")
+                    return {
+                        "index": index,
+                        "success": False,
+                        "msg": str(e),
+                        "local_deletions": [],
+                        "pending_id": pending_id
+                    }
+
+        # Create tasks for all selections
+        tasks = [process_selection(i, selection) for i, selection in enumerate(selections)]
+
+        # Process all tasks concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Collect results
+        for result in results:
+            if isinstance(result, Exception):
+                # Handle any exceptions from gather
+                LOGGER.error(f"Unexpected error in bulk resolve: {result}")
+                continue
+
+            if not result["success"]:
+                failed.append({"id": result["pending_id"], "reason": result["msg"]})
+            else:
+                if result["local_deletions"]:
+                    all_deletions.extend(result["local_deletions"])
+
         # Phase 2: Bulk Deletion (Parallel)
         if all_deletions:
              self.active_tasks[task_id]["details"] = "Cleaning up files from Telegram..."
              LOGGER.info(f"Task {task_id}: Deleting {len(all_deletions)} files...")
              await delete_multiple_messages(all_deletions)
-        
+
         # Completion
         self.active_tasks[task_id]["status"] = "completed"
         self.active_tasks[task_id]["details"] = "All operations completed."
