@@ -371,3 +371,35 @@ async def search_duplicates_route(
         "page_size": page_size
     }
 
+
+@router.get("/export_undeletable_junk")
+async def export_undeletable_junk(current_user: str = Depends(get_current_user)):
+    """
+    Export the require_user_delete collection as JSON for external processing.
+    """
+    import json
+    from fastapi.responses import Response
+    from datetime import datetime
+
+    # Generate timestamp for unique filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"undeletable_junk_{timestamp}.json"
+
+    # Get all entries from require_user_delete collection
+    junk_entries = await db.dbs["tracking"]["require_user_delete"].find({}).to_list(length=None)
+
+    # Convert ObjectId to string for JSON serialization
+    for entry in junk_entries:
+        entry['_id'] = str(entry['_id'])
+        if 'created_at' in entry:
+            entry['created_at'] = entry['created_at'].isoformat()
+
+    # Create JSON response
+    json_content = json.dumps(junk_entries, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=json_content,
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
