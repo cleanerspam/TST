@@ -110,12 +110,12 @@ class MetadataManager:
                     decoded = await decode_string(encoded_id)
                     chat_id = int(f"-100{decoded['chat_id']}")
                     msg_id = int(decoded['msg_id'])
-                    
+
                     # Round Robin / Random selection for load balancing
                     client = StreamBot
                     if multi_clients:
                         client = random.choice(list(multi_clients.values()))
-                    
+
                     try:
                         message = await client.get_messages(chat_id, msg_id)
                     except FloodWait as e:
@@ -127,14 +127,14 @@ class MetadataManager:
                         else:
                             await asyncio.sleep(e.value)
                             message = await client.get_messages(chat_id, msg_id)
-                            
+
                     if not message or message.empty:
-                        return None, None
-                        
+                        return None, None, None
+
                     file = message.video or message.document
                     if not file:
-                        return None, None
-                    
+                        return None, None, None
+
                     # Extract dc_id from file_id
                     try:
                         file_id_obj = FileId.decode(file.file_id)
@@ -142,12 +142,13 @@ class MetadataManager:
                     except Exception as e:
                         LOGGER.warning(f"Failed to extract dc_id: {e}")
                         dc_id = None
-                        
+
                     file_type = "video" if message.video else "document"
-                    return dc_id, file_type
+                    file_unique_id = file.file_unique_id  # Get the unique_id
+                    return dc_id, file_type, file_unique_id
                 except Exception as e:
                     LOGGER.warning(f"Failed to fetch telegram info: {e}")
-                    return None, None
+                    return None, None, None
 
             async def _safe_update_movie(collection, movie_doc):
                 nonlocal DONE, last_progress_edit
@@ -161,23 +162,26 @@ class MetadataManager:
                     current = dict(movie_doc)
 
                     # -----------------
-                    # 1. Backfill File Info (DC/Type)
+                    # 1. Backfill File Info (DC/Type/File Unique ID)
                     # -----------------
                     telegram_files = movie_doc.get("telegram", [])
                     files_updated = False
                     new_telegram = []
-                    
+
                     for f in telegram_files:
-                        # Check if missing info
-                        # We assume if dc_id is missing, we need to fetch
-                        if not f.get("dc_id"):
-                            dc, ftype = await fetch_telegram_file_info(f.get("id"))
-                            if dc:
-                                f["dc_id"] = dc
-                                f["file_type"] = ftype
+                        # Check if missing info (dc_id, file_type, or file_unique_id)
+                        if not f.get("dc_id") or not f.get("file_type") or not f.get("file_unique_id"):
+                            dc, ftype, unique_id = await fetch_telegram_file_info(f.get("id"))
+                            if dc or ftype or unique_id:
+                                if dc:
+                                    f["dc_id"] = dc
+                                if ftype:
+                                    f["file_type"] = ftype
+                                if unique_id:
+                                    f["file_unique_id"] = unique_id
                                 files_updated = True
                         new_telegram.append(f)
-                        
+
                     if files_updated:
                         update_query["telegram"] = new_telegram
                         current["telegram"] = new_telegram
@@ -260,21 +264,25 @@ class MetadataManager:
                     current = dict(tv_doc)
 
                     # -----------------
-                    # 1. Backfill File Info (DC/Type) for TV
+                    # 1. Backfill File Info (DC/Type/File Unique ID) for TV
                     # -----------------
                     seasons = tv_doc.get("seasons", [])
                     seasons_updated = False
-                    
+
                     # Iterate and update in place (careful, but valid for dicts in list)
                     for season in seasons:
                         for ep in season.get("episodes", []):
                             telegram_files = ep.get("telegram", [])
                             for f in telegram_files:
-                                if not f.get("dc_id"):
-                                    dc, ftype = await fetch_telegram_file_info(f.get("id"))
-                                    if dc:
-                                        f["dc_id"] = dc
-                                        f["file_type"] = ftype
+                                if not f.get("dc_id") or not f.get("file_type") or not f.get("file_unique_id"):
+                                    dc, ftype, unique_id = await fetch_telegram_file_info(f.get("id"))
+                                    if dc or ftype or unique_id:
+                                        if dc:
+                                            f["dc_id"] = dc
+                                        if ftype:
+                                            f["file_type"] = ftype
+                                        if unique_id:
+                                            f["file_unique_id"] = unique_id
                                         seasons_updated = True
                     
                     if seasons_updated:

@@ -98,6 +98,7 @@ async def restart_server(background_tasks: BackgroundTasks, current_user: str = 
     background_tasks.add_task(restart_process)
     return {"message": "Server restarting..."}
 
+
 @router.post("/fixmetadata")
 async def trigger_fix_metadata(
     background_tasks: BackgroundTasks, 

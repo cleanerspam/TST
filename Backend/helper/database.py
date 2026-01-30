@@ -1632,6 +1632,7 @@ class Database:
 
         return None
 
+
     async def resolve_pending_update(self, pending_id_str: str, decision: str):
         collection = self.dbs["tracking"]["pending_updates"]
         pending_doc = await collection.find_one({"_id": ObjectId(pending_id_str)})
