@@ -1469,75 +1469,17 @@ class Database:
             old_file = await self._get_active_file_info_internal(doc)
             doc["old_file"] = old_file
 
-            # Auto-resolve checks with enhanced logic
-            if old_file is None:
-                # If no current file, auto-accept the BEST/FIRST candidate
-                candidate_to_accept = item["candidates"][0]
-                LOGGER.info(f"Auto-resolving pending update group {group_key}: Current file not found, accepting first candidate.")
-                await self.resolve_pending_update(str(candidate_to_accept["_id"]), "keep_new")
-                continue
-
-            # Enhanced auto-resolution logic
+            # Just retrieve the pending updates without auto-resolving them
+            # Auto-resolution should happen when files are initially processed, not when viewing pending updates
             final_candidates = []
-            group_resolved = False
 
-            old_name = old_file.get("file_name", "") or old_file.get("name", "")
-            old_size = old_file.get("file_size", 0) or old_file.get("size", 0)
-            old_type = old_file.get("file_type", "video")
-            old_dc = old_file.get("dc_id")
-
+            # Add all candidates for manual review
             for cand in item["candidates"]:
                 cand_doc = convert_objectid_to_str(cand)
-                new_file = cand_doc["new_file"]
-                new_name = new_file.get("file_name", "") or new_file.get("name", "")
-                new_size = new_file.get("file_size", 0) or new_file.get("size", 0)
-                new_type = new_file.get("file_type", "video")
-                new_dc = new_file.get("dc_id")
-
-                # Check double extension fix
-                if old_name.endswith(".mkv.mkv") and new_name == old_name[:-4] and old_size == new_size:
-                     LOGGER.info(f"Auto-resolving double extension fix {cand_doc['_id']}: Replacing {old_name} with {new_name}")
-                     await self.resolve_pending_update(str(cand_doc["_id"]), "keep_new")
-                     group_resolved = True
-                     break
-
-                # Use the same logic as _should_delete_existing for consistency
-                # Create temporary file objects to use the function
-                temp_old_file = {
-                    "file_unique_id": old_file.get("file_unique_id"),
-                    "file_type": old_type,
-                    "dc_id": old_dc
-                }
-                temp_new_file = {
-                    "file_unique_id": new_file.get("file_unique_id"),
-                    "file_type": new_type,
-                    "dc_id": new_dc
-                }
-
-                should_delete_existing = _should_delete_existing(temp_old_file, temp_new_file)
-
-                if should_delete_existing:
-                    # Delete existing, keep new
-                    LOGGER.info(f"Auto-resolving: Preferring new file over existing: {new_name}")
-                    await self.resolve_pending_update(str(cand_doc["_id"]), "keep_new")
-                    group_resolved = True
-                    break
-                else:
-                    # Keep existing, reject new
-                    LOGGER.info(f"Auto-resolving: Keeping existing file over new: {old_name}")
-                    await self.resolve_pending_update(str(cand_doc["_id"]), "keep_old")
-                    continue  # Continue to check other candidates
-
-                # If same type and same DC status, add to candidates for manual review
                 final_candidates.append(cand_doc)
 
-            if group_resolved:
-                continue
-
             doc["candidates"] = final_candidates
-            # Only add to results if there are unresolved candidates
-            if final_candidates:
-                enriched.append(doc)
+            enriched.append(doc)
 
         return enriched, total
 
