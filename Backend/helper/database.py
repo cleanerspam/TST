@@ -2055,18 +2055,62 @@ class Database:
 
     async def search_pending_updates(self, query: str, page: int = 1, page_size: int = 20):
         """
-        Search for pending updates by title (case-insensitive).
+        Search for pending updates by title, filename, year, or TMDB ID (case-insensitive).
+        Supports exact matching for 4-digit years and numeric TMDB IDs, fuzzy matching for other queries.
         """
         skip = (page - 1) * page_size
         collection = self.dbs["tracking"]["pending_updates"]
 
-        # Case-insensitive search in metadata title
-        search_query = {
-            "metadata.title": {
-                "$regex": query,
-                "$options": "i"  # Case insensitive
+        # Check if query is a year (4-digit number)
+        year_match = re.match(r'^(\d{4})$', query.strip())
+
+        # Check if query is a numeric TMDB ID
+        tmdb_id_match = re.match(r'^(\d+)$', query.strip()) and not year_match
+
+        if year_match:
+            # If query is a 4-digit year, search by year in metadata
+            search_query = {
+                "metadata.year": int(year_match.group(1))
             }
-        }
+        elif tmdb_id_match:
+            # If query is a numeric ID (but not a 4-digit year), search by TMDB ID
+            search_query = {
+                "tmdb_id": int(query.strip())
+            }
+        else:
+            # For non-year/non-TMDB ID queries, search in multiple fields
+            # Also include year field in search (for cases where year is part of a broader search)
+            search_query = {
+                "$or": [
+                    {
+                        "metadata.title": {
+                            "$regex": query,
+                            "$options": "i"  # Case insensitive
+                        }
+                    },
+                    {
+                        "new_file.name": {  # Search in filename
+                            "$regex": query,
+                            "$options": "i"  # Case insensitive
+                        }
+                    },
+                    {
+                        "new_file.id": {  # Search in file id/encoded string
+                            "$regex": query,
+                            "$options": "i"  # Case insensitive
+                        }
+                    },
+                    {
+                        "$expr": {  # Also search in year field (convert int to string for substring matching)
+                            "$regexMatch": {
+                                "input": {"$toString": "$metadata.year"},
+                                "regex": query,
+                                "options": "i"
+                            }
+                        }
+                    }
+                ]
+            }
 
         pipeline = [
             {"$match": search_query},
