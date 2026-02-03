@@ -316,6 +316,24 @@ async def reidentify_update_route(
          raise HTTPException(status_code=400, detail=msg)
     return {"message": msg}
 
+@router.post("/updates/analyze")
+async def analyze_updates_route(
+    payload: dict = Body(...),
+    current_user: str = Depends(get_current_user)
+):
+    """
+    Trigger Deep Inspection & Scoring for a batch of pending updates.
+    """
+    pending_ids = payload.get("pending_ids", [])
+    if not pending_ids:
+        raise HTTPException(status_code=400, detail="No pending_ids provided")
+        
+    try:
+        results = await db.analyze_pending_items(pending_ids)
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/updates/bulk_resolve")
 async def bulk_resolve_updates(
     background_tasks: BackgroundTasks,

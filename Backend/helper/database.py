@@ -12,6 +12,8 @@ from Backend.config import Telegram
 import re
 from Backend.helper.encrypt import decode_string, encode_string
 from Backend.helper.modal import Episode, MovieSchema, QualityDetail, Season, TVShowSchema, PendingUpdateSchema
+from Backend.helper.stream_probe import StreamProbe
+from Backend.helper.quality_arbiter import QualityArbiter
 from Backend.helper.task_manager import delete_message
 import secrets
 import string
@@ -1723,6 +1725,18 @@ class Database:
 
             # Fetch active info ONCE for this group
             old_file = await self._get_active_file_info_internal(doc)
+            
+            # Auto-Resolve Zombie Conflicts: If old file is not in DB, accept the new file automatically.
+            if not old_file:
+                try:
+                    p_id = str(item["doc_id"])
+                    LOGGER.info(f"Auto-resolving zombie conflict for {doc.get('tmdb_id')} ({doc.get('quality')}) - Current file missing from DB")
+                    await self.resolve_pending_update(p_id, "keep_new")
+                    # Skip adding to response so it disappears from UI
+                    continue
+                except Exception as e:
+                    LOGGER.error(f"Failed to auto-resolve zombie conflict: {e}")
+
             doc["old_file"] = old_file
 
             # Just retrieve the pending updates without auto-resolving them
@@ -1744,18 +1758,22 @@ class Database:
         tmdb_id = info_dict.get("tmdb_id")
         media_type = info_dict.get("media_type")
         quality = info_dict.get("quality")
+        
+        meta = info_dict.get("metadata", {})
+        title = meta.get("title")
+        year = meta.get("year")
+        # Ensure year is int if present
+        try:
+            if year: year = int(year)
+        except:
+            year = None
 
-        total_storage_dbs = len(self.dbs) - 1
-        found_doc = None
-        found_db_key = None
-
-        for i in range(1, total_storage_dbs + 1):
-            db_key = f"storage_{i}"
-            col_name = "movie" if media_type == "movie" else "tv"
-            found_doc = await self.dbs[db_key][col_name].find_one({"tmdb_id": tmdb_id})
-            if found_doc:
-                found_db_key = db_key
-                break
+        col_name = "movie" if media_type == "movie" else "tv"
+        
+        # Use robust search to match update_movie logic
+        found_doc, found_db_key, found_db_index = await self._find_existing_media(
+            col_name, None, tmdb_id, title, year
+        )
 
         if not found_doc:
             return None
@@ -1767,7 +1785,8 @@ class Database:
         if media_type == "movie":
             telegram_files = found_doc.get("telegram", [])
             for q in telegram_files:
-                if q.get("quality") == quality:
+                # Case-insensitive quality check
+                if q.get("quality", "").lower() == str(quality).lower():
                     target_q = q
                     # Check if missing info (including file_unique_id)
                     if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown" or not q.get("file_unique_id"):
@@ -1802,7 +1821,8 @@ class Database:
                         if episode.get("episode_number") == en:
                             telegram_files = episode.get("telegram", [])
                             for q in telegram_files:
-                                if q.get("quality") == quality:
+                                # Case-insensitive quality check
+                                if q.get("quality", "").lower() == str(quality).lower():
                                     target_q = q
                                     # Check if missing info (including file_unique_id)
                                     if not q.get("dc_id") or not q.get("file_type") or str(q.get("file_type")).lower() == "unknown" or not q.get("file_unique_id"):
@@ -2556,13 +2576,13 @@ class Database:
 
     async def clean_expired_pending_updates(self):
         """
-        Remove pending updates older than 30 days.
+        Remove/Resolve pending updates older than 30 days.
         Runs as a background task every 24 hours.
         """
         from datetime import datetime, timedelta
         import asyncio
         from Backend.logger import LOGGER
-        from Backend.helper.task_manager import delete_message
+        from Backend.helper.task_manager import delete_multiple_messages
         
         while True:
             try:
@@ -2570,69 +2590,66 @@ class Database:
                 collection = self.dbs["tracking"]["pending_updates"]
                 
                 # Find expired items
-                expired_items = await collection.find({
+                expired_cursor = collection.find({
                     "created_at": {"$lt": expiry_date}
-                }).to_list(None)
+                })
+                expired_items = await expired_cursor.to_list(None)
                 
                 if expired_items:
-                    LOGGER.info(f"Found {len(expired_items)} expired pending updates to cleanup")
+                    LOGGER.info(f"Background Intelligence: Found {len(expired_items)} expired items. Starting Smart Resolve...")
                     
-                    # Delete files from Telegram before removing from DB
-                    deleted_count = 0
-                    for item in expired_items:
+                    expired_ids = [str(doc["_id"]) for doc in expired_items]
+                    
+                    # 1. Analyze (Probe & Score)
+                    try:
+                        decisions = await self.analyze_pending_items(expired_ids)
+                    except Exception as e:
+                        LOGGER.error(f"Auto-Resolve analysis failed: {e}")
+                        decisions = {}
+                    
+                    # 2. Execute Decisions
+                    all_deletions = []
+                    processed_count = 0
+                    
+                    for doc in expired_items:
+                        p_id = str(doc["_id"])
+                        
+                        # Get Recommendation (Default to 'keep_old' = Reject New, if analysis failed)
+                        # Failure to probe -> Safety First -> Keep Old (Delete New)
+                        rec = decisions.get(p_id, {}).get("recommendation", "keep_old")
+                        
                         try:
-                            # We need to delete the NEW candidate file that was pending
-                            f_info = item.get("new_file")
-                            if f_info and "id" in f_info:
-                                decoded = await decode_string(f_info["id"])
-                                chat_id = int(f"-100{decoded['chat_id']}")
-                                msg_id = int(decoded['msg_id'])
+                            # Log the decision
+                            new_score = decisions.get(p_id, {}).get("new_score", {}).get("total_score", "N/A")
+                            old_score = decisions.get(p_id, {}).get("old_score", {}).get("total_score", "N/A")
+                            LOGGER.info(f"[Auto-Expiry] Item {p_id}: decision={rec} (New:{new_score} vs Old:{old_score})")
 
-                                # Try to delete the message, if it fails store for later deletion
-                                # Only store if it's a permission issue, not just FloodWait
-                                try:
-                                    await delete_message(chat_id, msg_id)
-                                    deleted_count += 1
-                                except Exception as e:
-                                    error_msg = str(e).lower()
-                                    if "forbidden" in error_msg or "access" in error_msg or "permission" in error_msg:
-                                        LOGGER.error(f"Failed to delete expired file for pending update {msg_id} in {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
-                                        # Store for later deletion by external bot
-                                        await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                            "chat_id": chat_id,
-                                            "msg_id": msg_id,
-                                            "created_at": datetime.utcnow(),
-                                            "reason": "Expired pending update deletion failure"
-                                        })
-                                    else:
-                                        # If it's not a permission issue, just log it but don't add to require_user_delete
-                                        LOGGER.error(f"Failed to delete expired file for pending update {msg_id} in {chat_id}: {e}")
+                            success, msg, local_deletions = await self.resolve_pending_update(p_id, rec)
+                            
+                            if success:
+                                if local_deletions:
+                                    all_deletions.extend(local_deletions)
+                                processed_count += 1
+                            else:
+                                LOGGER.error(f"[Auto-Expiry] Failed to resolve {p_id}: {msg}")
+                                
                         except Exception as e:
-                            LOGGER.error(f"Failed to delete expired file for pending update {item.get('_id')}: {e}")
-                    
-                    # Remove from database
-                    result = await collection.delete_many({
-                        "created_at": {"$lt": expiry_date}
-                    })
-                    
-                    LOGGER.info(f"Cleaned up {result.deleted_count} expired pending updates (Files deleted: {deleted_count})")
-            
+                             LOGGER.error(f"[Auto-Expiry] Exception for {p_id}: {e}")
+
+                    # 3. Bulk delete files
+                    if all_deletions:
+                        LOGGER.info(f"[Auto-Expiry] Cleaning up {len(all_deletions)} files...")
+                        await delete_multiple_messages(all_deletions)
+                        
+                    LOGGER.info(f"[Auto-Expiry] Batch complete. Resolved {processed_count}/{len(expired_items)} items.")
+                
             except Exception as e:
-                 LOGGER.error(f"Error in clean_expired_pending_updates task: {e}")
-                 
-            # Verify and clean require_user_delete entries (weekly)
-            # This runs approximately every 7 days (7 * 24 * 3600 seconds)
-            # We'll track the last run time to determine when to run this
-            if not hasattr(self, '_last_verification_time'):
-                self._last_verification_time = datetime.utcnow()
+                LOGGER.error(f"Error in clean_expired_pending_updates: {e}")
+                
+            # Sleep for 24 hours
+            await asyncio.sleep(24 * 3600)
 
-            time_since_last_verification = datetime.utcnow() - self._last_verification_time
-            if time_since_last_verification.days >= 7:
-                await self.verify_and_clean_require_user_delete()
-                self._last_verification_time = datetime.utcnow()
 
-            # Wait 24 hours before next check
-            await asyncio.sleep(86400)
 
     async def search_pending_updates(self, query: str, page: int = 1, page_size: int = 20):
         """
@@ -2774,3 +2791,151 @@ class Database:
         return enriched, total
 
 
+
+    # -------------------------------------------------------------------------
+    # SMART UPGRADE V9 - ANALYSIS ENGINE
+    # -------------------------------------------------------------------------
+    async def analyze_pending_items(self, pending_ids: List[str]):
+        """
+        Orchestrates the Deep Inspection & Scoring for a batch of pending updates.
+        1. Identifies all files involved (Candidates vs Old Files).
+        2. Probes them in parallel (using StreamProbe).
+        3. Calculates scores (using QualityArbiter).
+        4. Updates DB with 'tech_metadata'.
+        5. Returns structured comparison for UI.
+        """
+        # 1. Fetch Pending Records
+        oids = []
+        for pid in pending_ids:
+            try:
+                oids.append(ObjectId(pid))
+            except: pass
+            
+        pending_docs = await self.dbs["tracking"]["pending_updates"].find({"_id": {"$in": oids}}).to_list(None)
+        if not pending_docs:
+            return {}
+
+        results = {}
+        files_to_probe = []
+        
+        # 2. Prepare Probing List
+        for doc in pending_docs:
+            p_id = str(doc["_id"])
+            
+            # A. Candidate (New File)
+            new_file_info = doc.get("new_file", {})
+            # A. Candidate (New File)
+            new_file_info = doc.get("new_file", {})
+            try:
+                # Extract filename for semantic parsing
+                fname = new_file_info.get("name", "Unknown.mkv")
+                
+                probe_payload = {
+                    "id": f"new_{p_id}",
+                    "filename": fname
+                }
+                
+                # Real Probe Logic: Decode ID -> Get Chat/Message
+                if "id" in new_file_info:
+                     try:
+                         # We need decode_string (ensure it's imported or available)
+                         # It is usually imported from Backend.common.vars or local utility
+                         decoded = await decode_string(new_file_info["id"])
+                         chat_id = int(f"-100{decoded['chat_id']}")
+                         msg_id = int(decoded['msg_id'])
+                         
+                         from Backend.helper.task_manager import get_next_client
+                         client = get_next_client()
+                         
+                         probe_payload["tg_file_ref"] = {
+                             "client": client,
+                             "chat_id": chat_id,
+                             "msg_id": msg_id
+                         }
+                     except Exception as e:
+                         LOGGER.warning(f"Failed to decode ID for probe {p_id}: {e}")
+                
+                files_to_probe.append(probe_payload)
+
+            except Exception as e:
+                LOGGER.error(f"Error prep new file for {p_id}: {e}")
+
+            # B. Current File (Old File)
+            # We need to fetch the current file again to be sure (or use doc['media_type'] etc to find it)
+            # But get_pending_updates already usually attaches 'old_file' info if we were calling that.
+            # Here we just have the raw pending_doc. We need to find the old file.
+            old_file = await self._get_active_file_info_internal(doc)
+            if old_file:
+                fname_old = old_file.get("name", "Unknown.mkv")
+                files_to_probe.append({
+                    "id": f"old_{p_id}",
+                    "filename": fname_old
+                    # "link": ...
+                })
+
+        # 3. Parallel Probe (Currently mostly Semantic due to link limitation, but architecture stands)
+        probe_results = await StreamProbe.parallel_probe(files_to_probe)
+        
+        # 4. Arbitration
+        final_decisions = {}
+        
+        for doc in pending_docs:
+            p_id = str(doc["_id"])
+            new_key = f"new_{p_id}"
+            old_key = f"old_{p_id}"
+            
+            # Get Probe Data
+            p_new = probe_results.get(new_key, {})
+            p_old = probe_results.get(old_key, {})
+            
+            # Fallback for old file info if probe failed/missing (e.g. file deleted)
+            if not p_old:
+                # If old file missing, New wins by default (Zombie check handles this too)
+                final_decisions[p_id] = {
+                    "recommendation": "keep_new",
+                    "reason": "Current file missing"
+                }
+                continue
+
+            # Calculate Scores
+            # New File
+            new_info = doc.get("new_file", {})
+            s_tags_new = p_new.get("semantic", StreamProbe.semantic_parse(new_info.get("name", "")))
+            p_data_new = p_new.get("probe", {})
+            
+            score_new = QualityArbiter.calculate_score(p_data_new, s_tags_new, new_info)
+            
+            # Old File
+            old_info = await self._get_active_file_info_internal(doc) or {}
+            s_tags_old = p_old.get("semantic", StreamProbe.semantic_parse(old_info.get("name", "")))
+            p_data_old = p_old.get("probe", {})
+            
+            score_old = QualityArbiter.calculate_score(p_data_old, s_tags_old, old_info)
+            
+            # Compare
+            decision = QualityArbiter.compare(
+                score_old, score_new, 
+                int(old_info.get("size", 0)), int(new_info.get("size", 0))
+            )
+
+            # Persist Tech Metadata to Pending Doc (so UI can show it)
+            # We update the pending_doc to cache this score
+            await self.dbs["tracking"]["pending_updates"].update_one(
+                {"_id": doc["_id"]},
+                {"$set": {
+                    "tech_analysis": {
+                        "score_new": score_new,
+                        "score_old": score_old,
+                        "recommendation": decision,
+                        "probed_at": datetime.utcnow()
+                    }
+                }}
+            )
+            
+            final_decisions[p_id] = {
+                "recommendation": decision,
+                "new_score": score_new,
+                "old_score": score_old
+            }
+
+        return final_decisions

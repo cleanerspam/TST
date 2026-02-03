@@ -13,6 +13,7 @@ class QualityDetail(BaseModel):
     dc_id: Optional[int] = None
     file_type: Optional[str] = "video"
     file_unique_id: Optional[str] = None
+    tech_metadata: Optional[dict] = Field(default_factory=dict)
 
 
 # ---------------------------
