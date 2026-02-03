@@ -192,10 +192,10 @@ class QualityArbiter:
         
         diff = s_new - s_old
         
-        # 1. Clear Winner (> 50 pts)
-        if diff > 50:
+        # 1. Clear Winner (> 100 pts)
+        if diff > 100:
             return "keep_new"
-        if diff < -50:
+        if diff < -100:
             return "keep_old"
             
         # 2. Tie-Breaker (Efficiency)
