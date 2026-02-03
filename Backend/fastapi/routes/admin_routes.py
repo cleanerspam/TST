@@ -324,7 +324,7 @@ async def analyze_updates_route(
     """
     Trigger Deep Inspection & Scoring for a batch of pending updates.
     """
-    from Backend.common.logger import LOGGER
+    from Backend.logger import LOGGER
     import traceback
     
     pending_ids = payload.get("pending_ids", [])
