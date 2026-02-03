@@ -456,18 +456,19 @@
                 item.candidates.forEach(cand => {
                     const newFile = cand.new_file;
                     const cid = cand._id;
+                    const fName = newFile.file_name || newFile.name || 'Unknown';
 
                     candidatesHtml += `
                         <div class="bg-white/5 p-3 rounded border border-gray-700 mb-3 last:mb-0 relative transition-all" data-candidate-id="${cid}">
                             <div class="flex justify-between items-start mb-2">
                                 <div class="text-xs break-all text-gray-900 font-mono bg-white border border-gray-200 p-2 rounded leading-relaxed shadow-sm w-full mr-2">
-                                    ${newFile.file_name || newFile.name || 'Unknown'}
+                                    ${fName}
                                 </div>
                                 <div class="flex-shrink-0">
                                     <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')" 
                                         id="btn-accept-${cid}"
                                         data-group-id="${cardId}"
-                                        class="flex items-center space-x-1 px-3 py-2 rounded bg-gray-100 hover:bg-green-100 text-green-700 border border-green-200 transition-colors">
+                                        class="flex items-center space-x-1 px-3 py-2 rounded bg-white hover:bg-green-50 text-green-700 border border-green-200 shadow-sm transition-all opacity-90 hover:opacity-100">
                                         <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
                                         <span class="font-bold text-xs">Accept</span>
                                     </button>
@@ -536,10 +537,6 @@
                                 ${oldFile ? (() => {
                     const fName = oldFile.file_name || oldFile.name || 'Unknown';
                     let fType = oldFile.file_type || 'Unknown';
-                    if (fType.toLowerCase() === 'unknown') {
-                        const ext = fName.split('.').pop().toLowerCase();
-                        if (['mkv', 'mp4', 'avi', 'mov', 'webm'].includes(ext)) fType = 'video';
-                    }
 
                     return `
                                     <div class="space-y-4 flex-1">
@@ -1307,169 +1304,171 @@
         showToast(`Analyzed ${count} items, ${selectedCount} auto-selected. Starting timer...`, "success");
 
 
-        function startAutoSubmitTimer() {
-            const bar = document.getElementById('bulk-bar');
-            bar.classList.remove('translate-y-full'); // Force show
+    }
 
-            const btn = document.getElementById('submit-btn');
-            const originalText = "Submit Selection";
-            let timeLeft = 60;
+    function startAutoSubmitTimer() {
+        const bar = document.getElementById('bulk-bar');
+        bar.classList.remove('translate-y-full'); // Force show
 
-            // Visuals
-            btn.classList.add('animate-pulse', 'ring-2', 'ring-indigo-400');
+        const btn = document.getElementById('submit-btn');
+        const originalText = "Submit Selection";
+        let timeLeft = 60;
 
-            autoResolveTimer = setInterval(() => {
-                btn.innerHTML = `Auto-Submit in ${timeLeft}s...`; // Update button text
-                timeLeft--;
+        // Visuals
+        btn.classList.add('animate-pulse', 'ring-2', 'ring-indigo-400');
 
-                if (timeLeft <= 0) {
-                    clearInterval(autoResolveTimer);
-                    submitAll(true); // Auto-submit with refresh flag
-                }
-            }, 1000);
-        }
+        autoResolveTimer = setInterval(() => {
+            btn.innerHTML = `Auto-Submit in ${timeLeft}s...`; // Update button text
+            timeLeft--;
 
-
-        function cancelAutoResolve(ByUser = false) {
-            if (autoResolveTimer) {
+            if (timeLeft <= 0) {
                 clearInterval(autoResolveTimer);
-                autoResolveTimer = null;
+                submitAll(true); // Auto-submit with refresh flag
             }
+        }, 1000);
+    }
 
-            // Reset Submit Button UI
-            const btn = document.getElementById('submit-btn');
-            if (btn) {
-                btn.innerHTML = "Submit Selection";
-                btn.classList.remove('animate-pulse', 'ring-2', 'ring-indigo-400');
-            }
 
-            // IMPORTANT: We only set isAutoResolving false here.
-            // We do NOT turn off the Toggle unless ByUser explicitly clicked the toggle (handled in toggle function)
-            // OR if we want manual cancel button to turn it off.
-
-            isAutoResolving = false;
-
-            if (ByUser) {
-                showToast("Auto-submit cancelled.", "info");
-                // If user explicitly cancelled via "Cancel" button in banner, maybe we SHOULD turn off the mode?
-                // User Request: "manual selection should only pause timer"
-                // But clicking "Cancel" button is explicit. Let's effectively pause it for this page.
-                // If they want to effectively turn off mode, they use the toggle.
-            }
+    function cancelAutoResolve(ByUser = false) {
+        if (autoResolveTimer) {
+            clearInterval(autoResolveTimer);
+            autoResolveTimer = null;
         }
 
-        function resetAutoResolveUI() {
-            isAutoResolving = false;
-            // No button to reset anymore
+        // Reset Submit Button UI
+        const btn = document.getElementById('submit-btn');
+        if (btn) {
+            btn.innerHTML = "Submit Selection";
+            btn.classList.remove('animate-pulse', 'ring-2', 'ring-indigo-400');
         }
 
-        // Override or Extend submitAll to handle Auto-Refresh
-        // Since we can't easily override without seeing the original fn content fully, 
-        // let's assume `submitAll` needs to be modified or we create a wrapper.
-        // The original `submitAll` calls `/api/admin/updates/bulk_resolve` and reload.
-        // We will inject a new version of submitAll here that overwrites the previous one if defined
-        // or we just define `submitAll` here if it wasn't in the view (it wasn't in the snippet I saw).
-        // Wait, the snippet I saw stopped at line 300, and I read 800-1090. `submitAll` was likely in the middle.
-        // I should probably redefine it here to ensure it supports the "1s wait -> reload" logic.
+        // IMPORTANT: We only set isAutoResolving false here.
+        // We do NOT turn off the Toggle unless ByUser explicitly clicked the toggle (handled in toggle function)
+        // OR if we want manual cancel button to turn it off.
 
-        async function submitAll(isAuto = false) {
-            if (Object.keys(selections).length === 0) return showToast("No items selected", "error");
+        isAutoResolving = false;
 
-            // Prepare payload
-            const payload = {
-                selections: Object.entries(selections).map(([id, action]) => ({
-                    pending_id: id,
-                    action: action
-                }))
-            };
+        if (ByUser) {
+            showToast("Auto-submit cancelled.", "info");
+            // If user explicitly cancelled via "Cancel" button in banner, maybe we SHOULD turn off the mode?
+            // User Request: "manual selection should only pause timer"
+            // But clicking "Cancel" button is explicit. Let's effectively pause it for this page.
+            // If they want to effectively turn off mode, they use the toggle.
+        }
+    }
 
-            // UI Feedback
-            const btn = document.getElementById('submit-btn');
-            const origText = btn.innerHTML;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-            btn.disabled = true;
+    function resetAutoResolveUI() {
+        isAutoResolving = false;
+        // No button to reset anymore
+    }
 
-            try {
-                const response = await fetch('/api/admin/updates/bulk_resolve', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
+    // Override or Extend submitAll to handle Auto-Refresh
+    // Since we can't easily override without seeing the original fn content fully, 
+    // let's assume `submitAll` needs to be modified or we create a wrapper.
+    // The original `submitAll` calls `/api/admin/updates/bulk_resolve` and reload.
+    // We will inject a new version of submitAll here that overwrites the previous one if defined
+    // or we just define `submitAll` here if it wasn't in the view (it wasn't in the snippet I saw).
+    // Wait, the snippet I saw stopped at line 300, and I read 800-1090. `submitAll` was likely in the middle.
+    // I should probably redefine it here to ensure it supports the "1s wait -> reload" logic.
 
-                const data = await response.json();
+    async function submitAll(isAuto = false) {
+        if (Object.keys(selections).length === 0) return showToast("No items selected", "error");
 
-                if (response.ok) {
-                    // SUCCESS -> Continuous Flow
-                    const msg = isAuto ? "Auto-submitted choices." : "Submitted successfully.";
-                    showToast(msg, "success");
+        // Prepare payload
+        const payload = {
+            selections: Object.entries(selections).map(([id, action]) => ({
+                pending_id: id,
+                action: action
+            }))
+        };
 
-                    // Show Progress Modal for visual feedback
-                    if (data.task_id) {
-                        trackTaskProgress(data.task_id);
-                    } else {
-                        // Instant success (fallback)
-                        setTimeout(() => window.location.reload(), 1000);
-                    }
+        // UI Feedback
+        const btn = document.getElementById('submit-btn');
+        const origText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+        btn.disabled = true;
 
+        try {
+            const response = await fetch('/api/admin/updates/bulk_resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                // SUCCESS -> Continuous Flow
+                const msg = isAuto ? "Auto-submitted choices." : "Submitted successfully.";
+                showToast(msg, "success");
+
+                // Show Progress Modal for visual feedback
+                if (data.task_id) {
+                    trackTaskProgress(data.task_id);
                 } else {
-                    showToast(data.detail || "Submission failed", "error");
-                    btn.innerHTML = origText;
-                    btn.disabled = false;
+                    // Instant success (fallback)
+                    setTimeout(() => window.location.reload(), 1000);
                 }
-            } catch (e) {
-                console.error(e);
-                showToast("Network error", "error");
+
+            } else {
+                showToast(data.detail || "Submission failed", "error");
                 btn.innerHTML = origText;
                 btn.disabled = false;
             }
+        } catch (e) {
+            console.error(e);
+            showToast("Network error", "error");
+            btn.innerHTML = origText;
+            btn.disabled = false;
         }
-
-        // Task Polling Logic (Simple version)
-        function trackTaskProgress(taskId) {
-            const modal = document.getElementById('progress-modal');
-            const bar = document.getElementById('progress-bar');
-            const text = document.getElementById('progress-text');
-            const pct = document.getElementById('progress-percentage');
-
-            modal.classList.remove('hidden');
-
-            const poll = setInterval(async () => {
-                try {
-                    const res = await fetch(`/api/admin/updates/task/${taskId}`);
-                    const status = await res.json();
-
-                    if (status.total > 0) {
-                        const percent = Math.round((status.processed / status.total) * 100);
-                        bar.style.width = `${percent}%`;
-                        pct.textContent = `${percent}%`;
-                        text.textContent = `Processed ${status.processed} of ${status.total}`;
-                    }
-
-                    if (status.status === 'completed') {
-                        clearInterval(poll);
-                        if (status.failed.length > 0) {
-                            showToast(`Completed with ${status.failed.length} errors`, "warning");
-                        } else {
-                            showToast("All tasks completed!", "success");
-                        }
-
-                        // Unified Auto-Refresh: Wait 1s and Reload
-                        setTimeout(() => {
-                            window.location.reload();
-                        }, 1000);
-                    }
-                } catch (e) { console.error(e); }
-            }, 1000);
-        }
-
-        function updateBulkBar() {
-            const count = Object.keys(selections).length;
-            document.getElementById('selection-count').textContent = count;
-            const bar = document.getElementById('bulk-bar');
-            if (count > 0) bar.classList.remove('translate-y-full');
-            else bar.classList.add('translate-y-full');
-        }
-
     }
+
+    // Task Polling Logic (Simple version)
+    function trackTaskProgress(taskId) {
+        const modal = document.getElementById('progress-modal');
+        const bar = document.getElementById('progress-bar');
+        const text = document.getElementById('progress-text');
+        const pct = document.getElementById('progress-percentage');
+
+        modal.classList.remove('hidden');
+
+        const poll = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/admin/updates/task/${taskId}`);
+                const status = await res.json();
+
+                if (status.total > 0) {
+                    const percent = Math.round((status.processed / status.total) * 100);
+                    bar.style.width = `${percent}%`;
+                    pct.textContent = `${percent}%`;
+                    text.textContent = `Processed ${status.processed} of ${status.total}`;
+                }
+
+                if (status.status === 'completed') {
+                    clearInterval(poll);
+                    if (status.failed.length > 0) {
+                        showToast(`Completed with ${status.failed.length} errors`, "warning");
+                    } else {
+                        showToast("All tasks completed!", "success");
+                    }
+
+                    // Unified Auto-Refresh: Wait 1s and Reload
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 1000);
+                }
+            } catch (e) { console.error(e); }
+        }, 1000);
+    }
+
+    function updateBulkBar() {
+        const count = Object.keys(selections).length;
+        document.getElementById('selection-count').textContent = count;
+        const bar = document.getElementById('bulk-bar');
+        if (count > 0) bar.classList.remove('translate-y-full');
+        else bar.classList.add('translate-y-full');
+    }
+
+
 </script>
 {% endblock %}

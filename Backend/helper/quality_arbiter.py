@@ -41,9 +41,15 @@ class QualityArbiter:
             score += 200
             breakdown.append("DC4 Source (+200)")
 
+        # File Type Preference (Video > Document)
+        f_type = str(file_info.get("file_type", "video")).lower()
+        if f_type == "document":
+            score -= 100
+            breakdown.append("Document Type Penalty (-100)")
+
         # Container Type & Filename
         container = probe_data.get("container", "").lower()
-        filename = file_info.get("filename", "").lower()
+        filename = file_info.get("filename", file_info.get("name", "")).lower()
 
         # mkvCinemas Preference
         if "mkvcinemas" in filename:
@@ -199,25 +205,42 @@ class QualityArbiter:
         
         diff = s_new - s_old
         
-        # 1. Clear Winner (> 100 pts)
+        # 1. Clear Winner (> 100 pts) 
         if diff > 100:
+            LOGGER.info(f"DECISION: Keep New (Clear Winner +{diff})")
             return "keep_new"
         if diff < -100:
+            LOGGER.info(f"DECISION: Keep Old (Clear Loser {diff})")
             return "keep_old"
             
-        # 2. Tie-Breaker (Efficiency)
-        # If score is roughly same (+- 100), check size threshold
-        
-        size_diff_mb = abs(new_size - old_size) / (1024 * 1024)
-        
-        if size_diff_mb < 200:
-             # Treat as effectively equal size -> Prefer New if Score is slightly better or equal
-             if s_new >= s_old:
+        # 2. Dynamic Efficiency (Score Better by 50+)
+        # Allow 10% size increase if score is significantly better
+        if diff >= 50:
+             allowable_size = old_size * 1.10
+             LOGGER.info(f"Dynamic Limit: {allowable_size/1024/1024:.1f}MB (Old:{old_size/1024/1024:.1f}MB)")
+             
+             if new_size <= allowable_size:
+                 LOGGER.info("DECISION: Keep New (Better Score, Size within 10% limit)")
                  return "keep_new"
-             return "keep_old"
+             else:
+                 LOGGER.info("DECISION: Keep Old (Better Score but Size > 10% Limit)")
+                 return "keep_old"
 
-        # If size diff is significant, prefer smaller file if scores are close
+        # 3. Efficiency Tie-Breaker (Score Diff < 50)
+        # Strict efficiency: Prefer smaller file
+        # But if size is virtually identical (< 1% diff), prefer higher score or newer
+        size_diff_ratio = abs(new_size - old_size) / (old_size or 1)
+        
+        if size_diff_ratio < 0.01: # < 1% diff
+             if s_new >= s_old:
+                 LOGGER.info("DECISION: Keep New (Identical Size, Score >= Old)")
+                 return "keep_new"
+             else:
+                 return "keep_old"
+
         if new_size < old_size:
+            LOGGER.info("DECISION: Keep New (Smaller File, Similar Score)")
             return "keep_new"
         
+        LOGGER.info("DECISION: Keep Old (Larger File, Similar Score)")
         return "keep_old"
