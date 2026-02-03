@@ -38,16 +38,22 @@
                 class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
                 <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
             </button>
-            <button onclick="TriggerAutoResolve()" id="auto-resolve-btn"
-                class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
-                <i class="fas fa-magic"></i> <span>Auto-Resolve Page</span>
-            </button>
+
+            <!-- Auto-Resolve Toggle -->
+            <div class="flex items-center space-x-3 theme-card px-4 py-2 rounded border border-gray-700/50">
+                <span class="text-sm font-bold theme-text">Auto-Resolve</span>
+                <button id="auto-resolve-toggle" onclick="toggleAutoResolveMode()" role="switch" aria-checked="false"
+                    class="bg-gray-700 relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
+                    <span aria-hidden="true"
+                        class="translate-x-0 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"></span>
+                </button>
+            </div>
         </div>
     </div>
 
     <!-- Auto-Resolve Banner -->
     <div id="auto-resolve-banner"
-        class="hidden mb-8 theme-card border border-indigo-500/50 rounded-lg p-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-indigo-900/20 backdrop-blur-sm animate-fade-in">
+        class="hidden fixed bottom-24 right-4 sm:right-8 z-50 w-auto max-w-xl shadow-2xl theme-card border border-indigo-500/50 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-gray-900/95 backdrop-blur-md animate-fade-in transition-all duration-300">
         <div class="flex items-center space-x-4">
             <div
                 class="w-12 h-12 rounded-full bg-indigo-500/20 flex items-center justify-center border border-indigo-500/50">
@@ -59,7 +65,7 @@
             </div>
         </div>
         <div class="flex space-x-3">
-            <button onclick="cancelAutoResolve()"
+            <button onclick="cancelAutoResolve(true)"
                 class="px-6 py-2 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-colors font-medium">
                 Cancel
             </button>
@@ -262,7 +268,14 @@
     let currentSearchQuery = null;
 
     document.addEventListener('DOMContentLoaded', () => {
-        loadUpdates();
+        loadUpdates().then(() => {
+            // Check Auto-Resolve Mode on Load
+            if (sessionStorage.getItem('autoResolveMode') === 'true') {
+                updateToggleUI(true);
+                // Delay slightly to let render finish
+                setTimeout(() => TriggerAutoResolve(), 500);
+            }
+        });
 
         // Add event listener for search input
         const searchInput = document.getElementById('search-input');
@@ -389,9 +402,13 @@
 
     function loadMore() {
         if (currentSearchQuery) {
-            loadSearchResults();
+            loadSearchResults().then(() => {
+                if (sessionStorage.getItem('autoResolveMode') === 'true') TriggerAutoResolve();
+            });
         } else {
-            loadUpdates();
+            loadUpdates().then(() => {
+                if (sessionStorage.getItem('autoResolveMode') === 'true') TriggerAutoResolve();
+            });
         }
     }
 
@@ -591,6 +608,13 @@
     }
 
     function toggleSelection(id, action, groupId = null) {
+        // STOP TIMER IF RUNNING (PAUSE ONLY)
+        if (autoResolveTimer) {
+            cancelAutoResolve(false); // Stop the specific timer
+            // Don't disable the mode, just pause the current countdown
+            showToast("Timer paused for manual review (Auto-Resolve Mode active)", "info");
+        }
+
         if (!groupId) {
             const btn = document.getElementById(`btn-accept-${id}`) || document.getElementById(`btn-reject-${id}`);
             if (btn) groupId = btn.dataset.groupId;
@@ -1123,25 +1147,55 @@
     let autoResolveTimer = null;
     let isAutoResolving = false;
 
+    function toggleAutoResolveMode() {
+        const isEnabled = sessionStorage.getItem('autoResolveMode') === 'true';
+        const newState = !isEnabled;
+
+        sessionStorage.setItem('autoResolveMode', newState);
+        updateToggleUI(newState);
+
+        if (newState) {
+            TriggerAutoResolve();
+        } else {
+            cancelAutoResolve(true);
+        }
+    }
+
+    function updateToggleUI(enabled) {
+        const btn = document.getElementById('auto-resolve-toggle');
+        const knob = btn.querySelector('span');
+
+        btn.setAttribute('aria-checked', enabled);
+
+        if (enabled) {
+            btn.classList.add('bg-indigo-600');
+            btn.classList.remove('bg-gray-700');
+            knob.classList.add('translate-x-5');
+            knob.classList.remove('translate-x-0');
+        } else {
+            btn.classList.add('bg-gray-700');
+            btn.classList.remove('bg-indigo-600');
+            knob.classList.add('translate-x-0');
+            knob.classList.remove('translate-x-5');
+        }
+    }
+
     async function TriggerAutoResolve() {
         if (isAutoResolving) return;
+
+        // Visual indicator that it's running (on the toggle or separate?)
+        // The toggle is already green. Maybe show a toast or just proceed.
+        // If triggered by Load More, we might not want to disable anything immediately if it's seamless.
+        // But let's keep the spinner logic for now if specific button was used, OR just show toast.
+
         isAutoResolving = true;
 
-        // 1. Show analyzing state
-        document.getElementById('auto-resolve-btn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
-        document.getElementById('auto-resolve-btn').disabled = true;
-
-        // 2. Gather ALL candidate IDs (not just card IDs)
-        // Collect from btn-accept-* buttons and data-candidate-id elements
+        // 2. Gather ALL candidate IDs (CURRENT DOM STATE)
         const pendingIds = new Set();
-
-        // From accept buttons (covers all candidates)
         document.querySelectorAll('[id^="btn-accept-"]').forEach(btn => {
             const id = btn.id.replace('btn-accept-', '');
             if (id) pendingIds.add(id);
         });
-
-        // From data-candidate-id (multi-candidate layout)
         document.querySelectorAll('[data-candidate-id]').forEach(el => {
             const id = el.getAttribute('data-candidate-id');
             if (id) pendingIds.add(id);
@@ -1156,31 +1210,46 @@
             return;
         }
 
+        // 3. Helper for Retry
+        async function fetchWithRetry(url, options, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const res = await fetch(url, options);
+                    if (!res.ok) throw new Error(`Status ${res.status}`);
+                    return await res.json();
+                } catch (err) {
+                    if (i === retries - 1) throw err;
+                    console.log(`Retry ${i + 1}/${retries} failed: ${err.message}`);
+                    await new Promise(r => setTimeout(r, 1000)); // wait 1s
+                }
+            }
+        }
+
         try {
-            // 3. Call API
-            const response = await fetch('/api/admin/updates/analyze', {
+            // 3. Call API with Retry
+            const data = await fetchWithRetry('/api/admin/updates/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ pending_ids: pendingIdsArray })
             });
 
-            const data = await response.json();
             console.log('Analysis results:', data);
 
-            if (response.ok) {
-                // 4. Apply visuals & selections
+            // 4. Apply visuals & selections
+            if (data && data.results) {
                 applyAnalysisResults(data.results);
-
-                // 5. Start Timer
                 startAutoSubmitTimer();
             } else {
-                showToast("Analysis failed: " + data.detail, "error");
-                resetAutoResolveUI();
+                throw new Error("Invalid response format");
             }
+
         } catch (e) {
             console.error(e);
-            showToast("Network error during analysis", "error");
-            resetAutoResolveUI();
+            showToast("Analysis failed after retries. Please try again.", "error");
+            resetAutoResolveUI(); // This resets the lock
+            // Should we turn off mode? Maybe not on network error, just let user retry.
+        } finally {
+            // remove busy state if we had one
         }
     }
 
@@ -1236,50 +1305,55 @@
             const newCol = card.querySelector('.candidate-col');
             const oldCol = card.querySelector('.current-col');
 
+            // --- UI UPDATE: SUBTLE & PROFESSIONAL ---
+            // Remove old styling first if any
+
             if (rec === 'keep_new' && isBest) {
                 // Highlight new/candidate column
-                if (newCol) newCol.classList.add('ring-4', 'ring-green-500', 'ring-opacity-50', 'bg-green-900/10');
-                if (oldCol) oldCol.classList.add('opacity-50');
+                if (newCol) {
+                    newCol.classList.add('bg-green-500/5', 'border-l-4', 'border-green-500');
+                    // Add subtle icon
+                    const icon = document.createElement('div');
+                    icon.className = "absolute top-2 right-2 text-green-500 opacity-80";
+                    icon.innerHTML = '<i class="fas fa-check-circle lg"></i>';
+                    newCol.style.position = 'relative';
+                    newCol.appendChild(icon);
+                }
+                if (oldCol) oldCol.classList.add('opacity-40', 'grayscale');
 
                 // For multi-candidate: highlight specific candidate item
                 const candidateItem = document.querySelector(`[data-candidate-id="${pId}"]`);
                 if (candidateItem) {
-                    candidateItem.classList.add('ring-2', 'ring-green-500', 'bg-green-50');
+                    candidateItem.classList.add('bg-green-500/10', 'border-l-4', 'border-green-500');
+                    // Add subtle icon
+                    const icon = document.createElement('i');
+                    icon.className = "fas fa-check text-green-500 ml-auto";
+                    candidateItem.querySelector('.flex').appendChild(icon);
                 }
 
                 selections[pId] = 'keep_new';
                 selectedCount++;
 
-                // Add "Best" badge
-                const badgeTarget = document.querySelector(`[data-candidate-id="${pId}"]`) || newCol;
-                if (badgeTarget) {
-                    const badge = document.createElement('div');
-                    badge.className = "absolute top-1 right-1 bg-green-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow animate-pulse z-10";
-                    badge.innerHTML = `<i class="fas fa-crown"></i> Best`;
-                    badgeTarget.style.position = 'relative';
-                    badgeTarget.appendChild(badge);
-                }
             } else if (rec === 'keep_old') {
                 // Highlight current/old column
-                if (oldCol) oldCol.classList.add('ring-4', 'ring-green-500', 'ring-opacity-50', 'bg-green-900/10');
-                if (newCol) newCol.classList.add('opacity-50');
+                if (oldCol) {
+                    oldCol.classList.add('bg-blue-500/5', 'border-l-4', 'border-blue-500');
+                    // Add subtle icon
+                    const icon = document.createElement('div');
+                    icon.className = "absolute top-2 right-2 text-blue-500 opacity-80";
+                    icon.innerHTML = '<i class="fas fa-shield-alt lg"></i>';
+                    oldCol.style.position = 'relative';
+                    oldCol.appendChild(icon);
+                }
+                if (newCol) newCol.classList.add('opacity-40', 'grayscale');
 
                 // For multi-candidate: fade all candidates
                 card.querySelectorAll('[data-candidate-id]').forEach(el => {
-                    el.classList.add('opacity-50');
+                    el.classList.add('opacity-30', 'grayscale');
                 });
 
                 selections[pId] = 'keep_old';
                 selectedCount++;
-
-                // Add badge to old col
-                if (oldCol) {
-                    const badge = document.createElement('div');
-                    badge.className = "absolute top-1 right-1 bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow z-10";
-                    badge.innerHTML = `<i class="fas fa-check"></i> Keep`;
-                    oldCol.style.position = 'relative';
-                    oldCol.appendChild(badge);
-                }
             }
 
             count++;
@@ -1308,19 +1382,31 @@
         }, 1000);
     }
 
-    function cancelAutoResolve() {
-        clearInterval(autoResolveTimer);
+    function cancelAutoResolve(ByUser = false) {
+        if (autoResolveTimer) {
+            clearInterval(autoResolveTimer);
+            autoResolveTimer = null;
+        }
         document.getElementById('auto-resolve-banner').classList.add('hidden');
-        resetAutoResolveUI();
-        selections = {}; // Clear selections? Or keep them? User might want to keep analysis.
-        // Let's keep selections but stop timer.
-        showToast("Auto-submit cancelled. You can verify manually.", "info");
+
+        // IMPORTANT: We only set isAutoResolving false here.
+        // We do NOT turn off the Toggle unless ByUser explicitly clicked the toggle (handled in toggle function)
+        // OR if we want manual cancel button to turn it off.
+
+        isAutoResolving = false;
+
+        if (ByUser) {
+            showToast("Auto-submit cancelled.", "info");
+            // If user explicitly cancelled via "Cancel" button in banner, maybe we SHOULD turn off the mode?
+            // User Request: "manual selection should only pause timer"
+            // But clicking "Cancel" button is explicit. Let's effectively pause it for this page.
+            // If they want to effectively turn off mode, they use the toggle.
+        }
     }
 
     function resetAutoResolveUI() {
         isAutoResolving = false;
-        document.getElementById('auto-resolve-btn').innerHTML = '<i class="fas fa-magic"></i> <span>Auto-Resolve Page</span>';
-        document.getElementById('auto-resolve-btn').disabled = false;
+        // No button to reset anymore
     }
 
     // Override or Extend submitAll to handle Auto-Refresh

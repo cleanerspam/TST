@@ -48,9 +48,11 @@ class QualityArbiter:
         if "mkv" in container or filename.endswith(".mkv"):
             score += 100
             breakdown.append("MKV Container (+100)")
-        elif "mp4" in container or filename.endswith(".mp4"):
-            score -= 500
-            breakdown.append("MP4 Container (-500)")
+        
+        # Stricter MP4 Penalty (Check filename for 'mp4' causing it to be penalized even if ext is mkv)
+        if "mp4" in container or "mp4" in filename or filename.endswith(".mp4"):
+            score -= 5000
+            breakdown.append("MP4 Container/Name (-5000)")
             
         # ---------------------------------------------------------------------
         # 3. Video Rules
