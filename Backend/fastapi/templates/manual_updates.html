@@ -51,59 +51,42 @@
         </div>
     </div>
 
-    <!-- Auto-Resolve Banner -->
-    <div id="auto-resolve-banner"
-        class="hidden fixed bottom-24 right-4 sm:right-8 z-50 w-auto max-w-xl shadow-2xl theme-card border border-indigo-500/50 rounded-xl p-4 flex flex-col sm:flex-row items-center justify-between gap-4 bg-gray-900/95 backdrop-blur-md animate-fade-in transition-all duration-300">
-        <div class="flex items-center space-x-4">
-            <div
-                class="w-12 h-12 rounded-full bg-indigo-500/20 flex items-center justify-center border border-indigo-500/50">
-                <span id="countdown-timer" class="text-2xl font-bold text-indigo-400">60</span>
-            </div>
-            <div>
-                <h3 class="font-bold text-white text-lg">Auto-Submitting Choices</h3>
-                <p class="text-indigo-300 text-sm">Review the green selections below. Click "Cancel" to stop.</p>
-            </div>
-        </div>
-        <div class="flex space-x-3">
-            <button onclick="cancelAutoResolve(true)"
-                class="px-6 py-2 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-colors font-medium">
-                Cancel
-            </button>
-            <button onclick="submitAll()"
-                class="px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transition-transform active:scale-95 font-bold">
-                Submit Now
-            </button>
-        </div>
-    </div>
+    <!-- Auto-Resolve Banner Removed -->
+    class="px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transition-transform
+    active:scale-95 font-bold">
+    Submit Now
+    </button>
+</div>
+</div>
 
-    <!-- Loading State -->
-    <div id="loading" class="hidden text-center py-12">
-        <i class="fas fa-spinner fa-spin text-4xl text-primary"></i>
-        <p class="mt-4 theme-text-secondary">Loading pending updates...</p>
-    </div>
+<!-- Loading State -->
+<div id="loading" class="hidden text-center py-12">
+    <i class="fas fa-spinner fa-spin text-4xl text-primary"></i>
+    <p class="mt-4 theme-text-secondary">Loading pending updates...</p>
+</div>
 
-    <!-- Empty State -->
-    <div id="empty-state" class="hidden text-center py-12 theme-card rounded-lg">
-        <i class="fas fa-check-circle text-4xl text-green-500 mb-4"></i>
-        <h3 class="text-xl font-bold theme-text">All Caught Up!</h3>
-        <p class="theme-text-secondary">No pending updates found.</p>
-    </div>
+<!-- Empty State -->
+<div id="empty-state" class="hidden text-center py-12 theme-card rounded-lg">
+    <i class="fas fa-check-circle text-4xl text-green-500 mb-4"></i>
+    <h3 class="text-xl font-bold theme-text">All Caught Up!</h3>
+    <p class="theme-text-secondary">No pending updates found.</p>
+</div>
 
-    <!-- Grid -->
-    <div id="updates-grid" class="grid grid-cols-1 gap-6 mb-8">
-        <!-- Cards injected here -->
-    </div>
+<!-- Grid -->
+<div id="updates-grid" class="grid grid-cols-1 gap-6 mb-8">
+    <!-- Cards injected here -->
+</div>
 
-    <!-- Load More Button -->
-    <div class="text-center mt-8">
-        <button id="load-more-btn" onclick="loadMore()"
-            class="hidden theme-card hover:bg-opacity-80 px-6 py-3 rounded-full transition-colors font-medium">
-            Load More
-        </button>
-        <p id="load-count" class="text-sm theme-text-secondary mt-3"></p>
-    </div>
+<!-- Load More Button -->
+<div class="text-center mt-8">
+    <button id="load-more-btn" onclick="loadMore()"
+        class="hidden theme-card hover:bg-opacity-80 px-6 py-3 rounded-full transition-colors font-medium">
+        Load More
+    </button>
+    <p id="load-count" class="text-sm theme-text-secondary mt-3"></p>
+</div>
 
-    <!-- Quick Check Floating Stats (Optional, maybe just count) -->
+<!-- Quick Check Floating Stats (Optional, maybe just count) -->
 </div>
 
 <!-- Bottom Sticky Bar -->
@@ -1309,51 +1292,17 @@
             // Remove old styling first if any
 
             if (rec === 'keep_new' && isBest) {
-                // Highlight new/candidate column
-                if (newCol) {
-                    newCol.classList.add('bg-green-500/5', 'border-l-4', 'border-green-500');
-                    // Add subtle icon
-                    const icon = document.createElement('div');
-                    icon.className = "absolute top-2 right-2 text-green-500 opacity-80";
-                    icon.innerHTML = '<i class="fas fa-check-circle lg"></i>';
-                    newCol.style.position = 'relative';
-                    newCol.appendChild(icon);
+                // Use Standard Selection Logic to ensure Button State is correct
+                toggleSelection(pId, 'keep_new', card.id.replace('card-', ''));
+
+                // Add "Best" badge visual only (toggleSelection handles the button)
+                const badgeTarget = document.querySelector(`[data-candidate-id="${pId}"]`) || newCol;
+                if (badgeTarget && !badgeTarget.querySelector('.fa-crown')) { // Avoid dupes
+                    // (Optional: You can keep the subtle badge if desired, or rely on the Solid Green button)
                 }
-                if (oldCol) oldCol.classList.add('opacity-40', 'grayscale');
-
-                // For multi-candidate: highlight specific candidate item
-                const candidateItem = document.querySelector(`[data-candidate-id="${pId}"]`);
-                if (candidateItem) {
-                    candidateItem.classList.add('bg-green-500/10', 'border-l-4', 'border-green-500');
-                    // Add subtle icon
-                    const icon = document.createElement('i');
-                    icon.className = "fas fa-check text-green-500 ml-auto";
-                    candidateItem.querySelector('.flex').appendChild(icon);
-                }
-
-                selections[pId] = 'keep_new';
-                selectedCount++;
-
             } else if (rec === 'keep_old') {
-                // Highlight current/old column
-                if (oldCol) {
-                    oldCol.classList.add('bg-blue-500/5', 'border-l-4', 'border-blue-500');
-                    // Add subtle icon
-                    const icon = document.createElement('div');
-                    icon.className = "absolute top-2 right-2 text-blue-500 opacity-80";
-                    icon.innerHTML = '<i class="fas fa-shield-alt lg"></i>';
-                    oldCol.style.position = 'relative';
-                    oldCol.appendChild(icon);
-                }
-                if (newCol) newCol.classList.add('opacity-40', 'grayscale');
-
-                // For multi-candidate: fade all candidates
-                card.querySelectorAll('[data-candidate-id]').forEach(el => {
-                    el.classList.add('opacity-30', 'grayscale');
-                });
-
-                selections[pId] = 'keep_old';
-                selectedCount++;
+                // Use Standard Selection Logic
+                toggleSelection(pId, 'keep_old', card.id.replace('card-', ''));
             }
 
             count++;
@@ -1361,160 +1310,171 @@
 
         updateBulkBar();
         showToast(`Analyzed ${count} items, ${selectedCount} auto-selected. Starting timer...`, "success");
-    }
 
-    function startAutoSubmitTimer() {
-        // Show Banner
-        const banner = document.getElementById('auto-resolve-banner');
-        banner.classList.remove('hidden');
 
-        let timeLeft = 60;
-        const timerEl = document.getElementById('countdown-timer');
+        function startAutoSubmitTimer() {
+            const bar = document.getElementById('bulk-bar');
+            bar.classList.remove('translate-y-full'); // Force show
 
-        autoResolveTimer = setInterval(() => {
-            timeLeft--;
-            timerEl.textContent = timeLeft;
+            const btn = document.getElementById('submit-btn');
+            const originalText = "Submit Selection";
+            let timeLeft = 60;
 
-            if (timeLeft <= 0) {
-                clearInterval(autoResolveTimer);
-                submitAll(true); // Auto-submit with refresh flag
-            }
-        }, 1000);
-    }
+            // Visuals
+            btn.classList.add('animate-pulse', 'ring-2', 'ring-indigo-400');
 
-    function cancelAutoResolve(ByUser = false) {
-        if (autoResolveTimer) {
-            clearInterval(autoResolveTimer);
-            autoResolveTimer = null;
-        }
-        document.getElementById('auto-resolve-banner').classList.add('hidden');
+            autoResolveTimer = setInterval(() => {
+                btn.innerHTML = `Auto-Submit in ${timeLeft}s...`; // Update button text
+                timeLeft--;
 
-        // IMPORTANT: We only set isAutoResolving false here.
-        // We do NOT turn off the Toggle unless ByUser explicitly clicked the toggle (handled in toggle function)
-        // OR if we want manual cancel button to turn it off.
-
-        isAutoResolving = false;
-
-        if (ByUser) {
-            showToast("Auto-submit cancelled.", "info");
-            // If user explicitly cancelled via "Cancel" button in banner, maybe we SHOULD turn off the mode?
-            // User Request: "manual selection should only pause timer"
-            // But clicking "Cancel" button is explicit. Let's effectively pause it for this page.
-            // If they want to effectively turn off mode, they use the toggle.
-        }
-    }
-
-    function resetAutoResolveUI() {
-        isAutoResolving = false;
-        // No button to reset anymore
-    }
-
-    // Override or Extend submitAll to handle Auto-Refresh
-    // Since we can't easily override without seeing the original fn content fully, 
-    // let's assume `submitAll` needs to be modified or we create a wrapper.
-    // The original `submitAll` calls `/api/admin/updates/bulk_resolve` and reload.
-    // We will inject a new version of submitAll here that overwrites the previous one if defined
-    // or we just define `submitAll` here if it wasn't in the view (it wasn't in the snippet I saw).
-    // Wait, the snippet I saw stopped at line 300, and I read 800-1090. `submitAll` was likely in the middle.
-    // I should probably redefine it here to ensure it supports the "1s wait -> reload" logic.
-
-    async function submitAll(isAuto = false) {
-        if (Object.keys(selections).length === 0) return showToast("No items selected", "error");
-
-        // Prepare payload
-        const payload = {
-            selections: Object.entries(selections).map(([id, action]) => ({
-                pending_id: id,
-                action: action
-            }))
-        };
-
-        // UI Feedback
-        const btn = document.getElementById('submit-btn');
-        const origText = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
-        btn.disabled = true;
-
-        try {
-            const response = await fetch('/api/admin/updates/bulk_resolve', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            const data = await response.json();
-
-            if (response.ok) {
-                // SUCCESS -> Continuous Flow
-                const msg = isAuto ? "Auto-submitted choices." : "Submitted successfully.";
-                showToast(msg, "success");
-
-                // Show Progress Modal for visual feedback
-                if (data.task_id) {
-                    trackTaskProgress(data.task_id);
-                } else {
-                    // Instant success (fallback)
-                    setTimeout(() => window.location.reload(), 1000);
+                if (timeLeft <= 0) {
+                    clearInterval(autoResolveTimer);
+                    submitAll(true); // Auto-submit with refresh flag
                 }
+            }, 1000);
+        }
 
-            } else {
-                showToast(data.detail || "Submission failed", "error");
+
+        function cancelAutoResolve(ByUser = false) {
+            if (autoResolveTimer) {
+                clearInterval(autoResolveTimer);
+                autoResolveTimer = null;
+            }
+
+            // Reset Submit Button UI
+            const btn = document.getElementById('submit-btn');
+            if (btn) {
+                btn.innerHTML = "Submit Selection";
+                btn.classList.remove('animate-pulse', 'ring-2', 'ring-indigo-400');
+            }
+
+            // IMPORTANT: We only set isAutoResolving false here.
+            // We do NOT turn off the Toggle unless ByUser explicitly clicked the toggle (handled in toggle function)
+            // OR if we want manual cancel button to turn it off.
+
+            isAutoResolving = false;
+
+            if (ByUser) {
+                showToast("Auto-submit cancelled.", "info");
+                // If user explicitly cancelled via "Cancel" button in banner, maybe we SHOULD turn off the mode?
+                // User Request: "manual selection should only pause timer"
+                // But clicking "Cancel" button is explicit. Let's effectively pause it for this page.
+                // If they want to effectively turn off mode, they use the toggle.
+            }
+        }
+
+        function resetAutoResolveUI() {
+            isAutoResolving = false;
+            // No button to reset anymore
+        }
+
+        // Override or Extend submitAll to handle Auto-Refresh
+        // Since we can't easily override without seeing the original fn content fully, 
+        // let's assume `submitAll` needs to be modified or we create a wrapper.
+        // The original `submitAll` calls `/api/admin/updates/bulk_resolve` and reload.
+        // We will inject a new version of submitAll here that overwrites the previous one if defined
+        // or we just define `submitAll` here if it wasn't in the view (it wasn't in the snippet I saw).
+        // Wait, the snippet I saw stopped at line 300, and I read 800-1090. `submitAll` was likely in the middle.
+        // I should probably redefine it here to ensure it supports the "1s wait -> reload" logic.
+
+        async function submitAll(isAuto = false) {
+            if (Object.keys(selections).length === 0) return showToast("No items selected", "error");
+
+            // Prepare payload
+            const payload = {
+                selections: Object.entries(selections).map(([id, action]) => ({
+                    pending_id: id,
+                    action: action
+                }))
+            };
+
+            // UI Feedback
+            const btn = document.getElementById('submit-btn');
+            const origText = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+            btn.disabled = true;
+
+            try {
+                const response = await fetch('/api/admin/updates/bulk_resolve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // SUCCESS -> Continuous Flow
+                    const msg = isAuto ? "Auto-submitted choices." : "Submitted successfully.";
+                    showToast(msg, "success");
+
+                    // Show Progress Modal for visual feedback
+                    if (data.task_id) {
+                        trackTaskProgress(data.task_id);
+                    } else {
+                        // Instant success (fallback)
+                        setTimeout(() => window.location.reload(), 1000);
+                    }
+
+                } else {
+                    showToast(data.detail || "Submission failed", "error");
+                    btn.innerHTML = origText;
+                    btn.disabled = false;
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("Network error", "error");
                 btn.innerHTML = origText;
                 btn.disabled = false;
             }
-        } catch (e) {
-            console.error(e);
-            showToast("Network error", "error");
-            btn.innerHTML = origText;
-            btn.disabled = false;
         }
-    }
 
-    // Task Polling Logic (Simple version)
-    function trackTaskProgress(taskId) {
-        const modal = document.getElementById('progress-modal');
-        const bar = document.getElementById('progress-bar');
-        const text = document.getElementById('progress-text');
-        const pct = document.getElementById('progress-percentage');
+        // Task Polling Logic (Simple version)
+        function trackTaskProgress(taskId) {
+            const modal = document.getElementById('progress-modal');
+            const bar = document.getElementById('progress-bar');
+            const text = document.getElementById('progress-text');
+            const pct = document.getElementById('progress-percentage');
 
-        modal.classList.remove('hidden');
+            modal.classList.remove('hidden');
 
-        const poll = setInterval(async () => {
-            try {
-                const res = await fetch(`/api/admin/updates/task/${taskId}`);
-                const status = await res.json();
+            const poll = setInterval(async () => {
+                try {
+                    const res = await fetch(`/api/admin/updates/task/${taskId}`);
+                    const status = await res.json();
 
-                if (status.total > 0) {
-                    const percent = Math.round((status.processed / status.total) * 100);
-                    bar.style.width = `${percent}%`;
-                    pct.textContent = `${percent}%`;
-                    text.textContent = `Processed ${status.processed} of ${status.total}`;
-                }
-
-                if (status.status === 'completed') {
-                    clearInterval(poll);
-                    if (status.failed.length > 0) {
-                        showToast(`Completed with ${status.failed.length} errors`, "warning");
-                    } else {
-                        showToast("All tasks completed!", "success");
+                    if (status.total > 0) {
+                        const percent = Math.round((status.processed / status.total) * 100);
+                        bar.style.width = `${percent}%`;
+                        pct.textContent = `${percent}%`;
+                        text.textContent = `Processed ${status.processed} of ${status.total}`;
                     }
 
-                    // Unified Auto-Refresh: Wait 1s and Reload
-                    setTimeout(() => {
-                        window.location.reload();
-                    }, 1000);
-                }
-            } catch (e) { console.error(e); }
-        }, 1000);
-    }
+                    if (status.status === 'completed') {
+                        clearInterval(poll);
+                        if (status.failed.length > 0) {
+                            showToast(`Completed with ${status.failed.length} errors`, "warning");
+                        } else {
+                            showToast("All tasks completed!", "success");
+                        }
 
-    function updateBulkBar() {
-        const count = Object.keys(selections).length;
-        document.getElementById('selection-count').textContent = count;
-        const bar = document.getElementById('bulk-bar');
-        if (count > 0) bar.classList.remove('translate-y-full');
-        else bar.classList.add('translate-y-full');
-    }
+                        // Unified Auto-Refresh: Wait 1s and Reload
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 1000);
+                    }
+                } catch (e) { console.error(e); }
+            }, 1000);
+        }
 
+        function updateBulkBar() {
+            const count = Object.keys(selections).length;
+            document.getElementById('selection-count').textContent = count;
+            const bar = document.getElementById('bulk-bar');
+            if (count > 0) bar.classList.remove('translate-y-full');
+            else bar.classList.add('translate-y-full');
+        }
+
+    }
 </script>
 {% endblock %}
