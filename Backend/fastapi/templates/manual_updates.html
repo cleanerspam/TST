@@ -1131,11 +1131,26 @@
         document.getElementById('auto-resolve-btn').innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
         document.getElementById('auto-resolve-btn').disabled = true;
 
-        // 2. Gather IDs
-        const items = document.querySelectorAll('[data-pending-id]');
-        const pendingIds = Array.from(items).map(el => el.getAttribute('data-pending-id'));
+        // 2. Gather ALL candidate IDs (not just card IDs)
+        // Collect from btn-accept-* buttons and data-candidate-id elements
+        const pendingIds = new Set();
 
-        if (pendingIds.length === 0) {
+        // From accept buttons (covers all candidates)
+        document.querySelectorAll('[id^="btn-accept-"]').forEach(btn => {
+            const id = btn.id.replace('btn-accept-', '');
+            if (id) pendingIds.add(id);
+        });
+
+        // From data-candidate-id (multi-candidate layout)
+        document.querySelectorAll('[data-candidate-id]').forEach(el => {
+            const id = el.getAttribute('data-candidate-id');
+            if (id) pendingIds.add(id);
+        });
+
+        const pendingIdsArray = Array.from(pendingIds);
+        console.log('Analyzing pending IDs:', pendingIdsArray);
+
+        if (pendingIdsArray.length === 0) {
             showToast("No items to analyze", "error");
             resetAutoResolveUI();
             return;
@@ -1146,10 +1161,11 @@
             const response = await fetch('/api/admin/updates/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pending_ids: pendingIds })
+                body: JSON.stringify({ pending_ids: pendingIdsArray })
             });
 
             const data = await response.json();
+            console.log('Analysis results:', data);
 
             if (response.ok) {
                 // 4. Apply visuals & selections
@@ -1174,8 +1190,33 @@
 
         Object.keys(results).forEach(pId => {
             const res = results[pId];
-            const card = document.querySelector(`[data-pending-id="${pId}"]`);
-            if (!card) return;
+
+            // Find the card containing this candidate
+            // Try via accept button's data-group-id first
+            const acceptBtn = document.getElementById(`btn-accept-${pId}`);
+            let card = null;
+
+            if (acceptBtn && acceptBtn.dataset.groupId) {
+                card = document.getElementById(`card-${acceptBtn.dataset.groupId}`);
+            }
+
+            // Fallback: find via candidate item's parent card
+            if (!card) {
+                const candidateItem = document.querySelector(`[data-candidate-id="${pId}"]`);
+                if (candidateItem) {
+                    card = candidateItem.closest('.theme-card');
+                }
+            }
+
+            // Fallback: direct data-pending-id match (single candidate cards)
+            if (!card) {
+                card = document.querySelector(`[data-pending-id="${pId}"]`);
+            }
+
+            if (!card) {
+                console.log(`No card found for pId: ${pId}`);
+                return;
+            }
 
             const rec = res.recommendation; // "keep_new", "keep_old", or "skip"
             const isBest = res.is_best_candidate;

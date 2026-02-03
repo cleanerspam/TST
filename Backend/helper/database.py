@@ -2804,6 +2804,8 @@ class Database:
         3. Finds BEST candidate vs current file
         4. Returns recommendation with specific candidate_id to select
         """
+        from Backend.pyrofork.bot import multi_clients
+        
         # 1. Fetch Pending Records
         oids = []
         for pid in pending_ids:
@@ -2831,6 +2833,11 @@ class Database:
 
         files_to_probe = []
         
+        # Get list of available bot indices for round-robin
+        bot_indices = list(multi_clients.keys())
+        num_bots = len(bot_indices) if bot_indices else 1
+        probe_counter = [0]  # Mutable counter for round-robin
+        
         # 3. Prepare Probing List (all candidates + one old file per group)
         for key, docs in card_groups.items():
             # Probe all candidates
@@ -2844,18 +2851,21 @@ class Database:
                         "filename": fname
                     }
                     
-                    # Real Probe Logic
+                    # Real Probe Logic - use round-robin bot selection
                     if "id" in new_file_info:
                         try:
                             decoded = await decode_string(new_file_info["id"])
                             chat_id = int(f"-100{decoded['chat_id']}")
                             msg_id = int(decoded['msg_id'])
                             
-                            from Backend.helper.task_manager import get_next_client
-                            client = get_next_client()
+                            # Round-robin bot selection
+                            bot_idx = bot_indices[probe_counter[0] % num_bots]
+                            probe_counter[0] += 1
+                            client = multi_clients.get(bot_idx)
                             
                             probe_payload["tg_file_ref"] = {
                                 "client": client,
+                                "client_index": bot_idx,  # Pass index for logging
                                 "chat_id": chat_id,
                                 "msg_id": msg_id
                             }

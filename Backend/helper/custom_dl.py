@@ -360,8 +360,10 @@ async def _producer_task(
         
         tries = 0
         refresh_attempts = 0
-        max_retries = 10
-        max_refresh_attempts = 6
+        # Use fewer retries for probe streams (not critical)
+        is_probe = stream_id.startswith("probe_")
+        max_retries = 3 if is_probe else 10
+        max_refresh_attempts = 2 if is_probe else 6
         
         while tries < max_retries and not stop_event.is_set():
             # Least-loaded session selection
@@ -513,8 +515,11 @@ async def _producer_task(
                 circuit_breaker.record_failure(cache_key)
                 # LINEAR delay: 0.15s, 0.30s, 0.45s, 0.60s, ... up to 1.5s max
                 delay = min(0.15 * tries, 1.5)
-                print(f"CRITICAL: Chunk {seq_idx} FAILED: {type(e).__name__}: {e}") # Force output
-                LOGGER.error(f"[{stream_id[:8]}]: Chunk {seq_idx} FAILED (try {tries}/{max_retries}): {type(e).__name__}: {e}")
+                if not is_probe:
+                    print(f"CRITICAL: Chunk {seq_idx} FAILED: {type(e).__name__}: {e}") # Force output
+                    LOGGER.error(f"[{stream_id[:8]}]: Chunk {seq_idx} FAILED (try {tries}/{max_retries}): {type(e).__name__}: {e}")
+                else:
+                    LOGGER.debug(f"[{stream_id[:8]}]: Probe chunk {seq_idx} failed (try {tries}/{max_retries})")
                 LOGGER.debug(f"[{stream_id[:8]}]: Retry delay: {delay:.2f}s")
                 await asyncio.sleep(delay)
             
@@ -527,7 +532,10 @@ async def _producer_task(
             return seq_idx, None
 
         # All retries exhausted
-        LOGGER.error(f"[{stream_id[:8]}]: Chunk {seq_idx} failed after {max_retries} retries")
+        if is_probe:
+            LOGGER.debug(f"[{stream_id[:8]}]: Probe chunk {seq_idx} failed after {max_retries} retries")
+        else:
+            LOGGER.error(f"[{stream_id[:8]}]: Chunk {seq_idx} failed after {max_retries} retries")
         circuit_breaker.record_failure(cache_key)
         return seq_idx, None
     
