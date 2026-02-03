@@ -2798,11 +2798,11 @@ class Database:
     async def analyze_pending_items(self, pending_ids: List[str]):
         """
         Orchestrates the Deep Inspection & Scoring for a batch of pending updates.
-        1. Identifies all files involved (Candidates vs Old Files).
-        2. Probes them in parallel (using StreamProbe).
-        3. Calculates scores (using QualityArbiter).
-        4. Updates DB with 'tech_metadata'.
-        5. Returns structured comparison for UI.
+        Handles MULTIPLE CANDIDATES per card:
+        1. Groups candidates by card (tmdb_id, quality, season, episode)
+        2. Scores ALL candidates + current file in parallel
+        3. Finds BEST candidate vs current file
+        4. Returns recommendation with specific candidate_id to select
         """
         # 1. Fetch Pending Records
         oids = []
@@ -2815,127 +2815,191 @@ class Database:
         if not pending_docs:
             return {}
 
-        results = {}
+        # 2. Group by card (tmdb_id, media_type, quality, season, episode)
+        card_groups = {}
+        for doc in pending_docs:
+            key = (
+                doc.get("tmdb_id"),
+                doc.get("media_type"),
+                doc.get("quality"),
+                doc.get("season"),
+                doc.get("episode")
+            )
+            if key not in card_groups:
+                card_groups[key] = []
+            card_groups[key].append(doc)
+
         files_to_probe = []
         
-        # 2. Prepare Probing List
-        for doc in pending_docs:
-            p_id = str(doc["_id"])
+        # 3. Prepare Probing List (all candidates + one old file per group)
+        for key, docs in card_groups.items():
+            # Probe all candidates
+            for doc in docs:
+                p_id = str(doc["_id"])
+                new_file_info = doc.get("new_file", {})
+                try:
+                    fname = new_file_info.get("name", "Unknown.mkv")
+                    probe_payload = {
+                        "id": f"new_{p_id}",
+                        "filename": fname
+                    }
+                    
+                    # Real Probe Logic
+                    if "id" in new_file_info:
+                        try:
+                            decoded = await decode_string(new_file_info["id"])
+                            chat_id = int(f"-100{decoded['chat_id']}")
+                            msg_id = int(decoded['msg_id'])
+                            
+                            from Backend.helper.task_manager import get_next_client
+                            client = get_next_client()
+                            
+                            probe_payload["tg_file_ref"] = {
+                                "client": client,
+                                "chat_id": chat_id,
+                                "msg_id": msg_id
+                            }
+                        except Exception as e:
+                            LOGGER.warning(f"Failed to decode ID for probe {p_id}: {e}")
+                    
+                    files_to_probe.append(probe_payload)
+                except Exception as e:
+                    LOGGER.error(f"Error prep new file for {p_id}: {e}")
             
-            # A. Candidate (New File)
-            new_file_info = doc.get("new_file", {})
-            # A. Candidate (New File)
-            new_file_info = doc.get("new_file", {})
-            try:
-                # Extract filename for semantic parsing
-                fname = new_file_info.get("name", "Unknown.mkv")
-                
-                probe_payload = {
-                    "id": f"new_{p_id}",
-                    "filename": fname
-                }
-                
-                # Real Probe Logic: Decode ID -> Get Chat/Message
-                if "id" in new_file_info:
-                     try:
-                         # We need decode_string (ensure it's imported or available)
-                         # It is usually imported from Backend.common.vars or local utility
-                         decoded = await decode_string(new_file_info["id"])
-                         chat_id = int(f"-100{decoded['chat_id']}")
-                         msg_id = int(decoded['msg_id'])
-                         
-                         from Backend.helper.task_manager import get_next_client
-                         client = get_next_client()
-                         
-                         probe_payload["tg_file_ref"] = {
-                             "client": client,
-                             "chat_id": chat_id,
-                             "msg_id": msg_id
-                         }
-                     except Exception as e:
-                         LOGGER.warning(f"Failed to decode ID for probe {p_id}: {e}")
-                
-                files_to_probe.append(probe_payload)
-
-            except Exception as e:
-                LOGGER.error(f"Error prep new file for {p_id}: {e}")
-
-            # B. Current File (Old File)
-            # We need to fetch the current file again to be sure (or use doc['media_type'] etc to find it)
-            # But get_pending_updates already usually attaches 'old_file' info if we were calling that.
-            # Here we just have the raw pending_doc. We need to find the old file.
-            old_file = await self._get_active_file_info_internal(doc)
+            # Probe OLD file once per group (use first doc as reference)
+            first_doc = docs[0]
+            old_file = await self._get_active_file_info_internal(first_doc)
+            group_key_str = f"{key[0]}_{key[2]}_{key[3]}_{key[4]}"  # tmdb_quality_season_episode
+            
             if old_file:
                 fname_old = old_file.get("name", "Unknown.mkv")
                 files_to_probe.append({
-                    "id": f"old_{p_id}",
+                    "id": f"old_{group_key_str}",
                     "filename": fname_old
-                    # "link": ...
                 })
 
-        # 3. Parallel Probe (Currently mostly Semantic due to link limitation, but architecture stands)
+        # 4. Parallel Probe
         probe_results = await StreamProbe.parallel_probe(files_to_probe)
         
-        # 4. Arbitration
+        # 5. Arbitration per GROUP
         final_decisions = {}
         
-        for doc in pending_docs:
-            p_id = str(doc["_id"])
-            new_key = f"new_{p_id}"
-            old_key = f"old_{p_id}"
+        for key, docs in card_groups.items():
+            group_key_str = f"{key[0]}_{key[2]}_{key[3]}_{key[4]}"
+            old_key = f"old_{group_key_str}"
             
-            # Get Probe Data
-            p_new = probe_results.get(new_key, {})
+            # Get old file info and scores
+            first_doc = docs[0]
+            old_info = await self._get_active_file_info_internal(first_doc) or {}
             p_old = probe_results.get(old_key, {})
-            
-            # Fallback for old file info if probe failed/missing (e.g. file deleted)
-            if not p_old:
-                # If old file missing, New wins by default (Zombie check handles this too)
-                final_decisions[p_id] = {
-                    "recommendation": "keep_new",
-                    "reason": "Current file missing"
-                }
-                continue
-
-            # Calculate Scores
-            # New File
-            new_info = doc.get("new_file", {})
-            s_tags_new = p_new.get("semantic", StreamProbe.semantic_parse(new_info.get("name", "")))
-            p_data_new = p_new.get("probe", {})
-            
-            score_new = QualityArbiter.calculate_score(p_data_new, s_tags_new, new_info)
-            
-            # Old File
-            old_info = await self._get_active_file_info_internal(doc) or {}
             s_tags_old = p_old.get("semantic", StreamProbe.semantic_parse(old_info.get("name", "")))
             p_data_old = p_old.get("probe", {})
-            
             score_old = QualityArbiter.calculate_score(p_data_old, s_tags_old, old_info)
             
-            # Compare
+            # If old file missing, best candidate wins
+            if not old_info:
+                # Find best among candidates
+                best_candidate_id = None
+                best_score = {"total": -9999}
+                
+                for doc in docs:
+                    p_id = str(doc["_id"])
+                    new_info = doc.get("new_file", {})
+                    p_new = probe_results.get(f"new_{p_id}", {})
+                    s_tags_new = p_new.get("semantic", StreamProbe.semantic_parse(new_info.get("name", "")))
+                    p_data_new = p_new.get("probe", {})
+                    score_new = QualityArbiter.calculate_score(p_data_new, s_tags_new, new_info)
+                    
+                    if score_new["total"] > best_score["total"]:
+                        best_score = score_new
+                        best_candidate_id = p_id
+                
+                # Set recommendation for the BEST candidate
+                for doc in docs:
+                    p_id = str(doc["_id"])
+                    if p_id == best_candidate_id:
+                        final_decisions[p_id] = {
+                            "recommendation": "keep_new",
+                            "reason": "Current file missing, best among candidates",
+                            "is_best_candidate": True
+                        }
+                    else:
+                        final_decisions[p_id] = {
+                            "recommendation": "skip",  # Not the best candidate
+                            "reason": "Not selected (another candidate is better)",
+                            "is_best_candidate": False
+                        }
+                continue
+            
+            # Score all candidates and find best
+            candidate_scores = []
+            for doc in docs:
+                p_id = str(doc["_id"])
+                new_info = doc.get("new_file", {})
+                p_new = probe_results.get(f"new_{p_id}", {})
+                s_tags_new = p_new.get("semantic", StreamProbe.semantic_parse(new_info.get("name", "")))
+                p_data_new = p_new.get("probe", {})
+                score_new = QualityArbiter.calculate_score(p_data_new, s_tags_new, new_info)
+                
+                candidate_scores.append({
+                    "id": p_id,
+                    "doc": doc,
+                    "score": score_new,
+                    "info": new_info
+                })
+            
+            # Sort by score (highest first)
+            candidate_scores.sort(key=lambda x: x["score"]["total"], reverse=True)
+            best_candidate = candidate_scores[0]
+            
+            # Compare BEST candidate vs OLD file
             decision = QualityArbiter.compare(
-                score_old, score_new, 
-                int(old_info.get("size", 0)), int(new_info.get("size", 0))
-            )
-
-            # Persist Tech Metadata to Pending Doc (so UI can show it)
-            # We update the pending_doc to cache this score
-            await self.dbs["tracking"]["pending_updates"].update_one(
-                {"_id": doc["_id"]},
-                {"$set": {
-                    "tech_analysis": {
-                        "score_new": score_new,
-                        "score_old": score_old,
-                        "recommendation": decision,
-                        "probed_at": datetime.utcnow()
-                    }
-                }}
+                score_old, best_candidate["score"],
+                int(old_info.get("size", 0)), int(best_candidate["info"].get("size", 0))
             )
             
-            final_decisions[p_id] = {
-                "recommendation": decision,
-                "new_score": score_new,
-                "old_score": score_old
-            }
+            # Set results for ALL candidates in this group
+            for i, cand in enumerate(candidate_scores):
+                p_id = cand["id"]
+                is_best = (i == 0)
+                
+                if decision == "keep_new" and is_best:
+                    final_decisions[p_id] = {
+                        "recommendation": "keep_new",
+                        "new_score": cand["score"],
+                        "old_score": score_old,
+                        "is_best_candidate": True
+                    }
+                elif decision == "keep_old":
+                    final_decisions[p_id] = {
+                        "recommendation": "keep_old",
+                        "new_score": cand["score"],
+                        "old_score": score_old,
+                        "is_best_candidate": is_best
+                    }
+                else:
+                    # This candidate is not the best, skip it
+                    final_decisions[p_id] = {
+                        "recommendation": "skip",
+                        "new_score": cand["score"],
+                        "old_score": score_old,
+                        "is_best_candidate": False,
+                        "reason": "Another candidate scored higher"
+                    }
+                
+                # Persist Tech Metadata
+                await self.dbs["tracking"]["pending_updates"].update_one(
+                    {"_id": ObjectId(p_id)},
+                    {"$set": {
+                        "tech_analysis": {
+                            "score": cand["score"],
+                            "score_old": score_old,
+                            "recommendation": final_decisions[p_id]["recommendation"],
+                            "is_best_candidate": is_best,
+                            "probed_at": datetime.utcnow()
+                        }
+                    }}
+                )
 
         return final_decisions
+

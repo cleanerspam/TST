@@ -187,10 +187,17 @@ class StreamProbe:
             * tg_file_ref: Optional dict with {"client": client_obj, "chat_id": int, "msg_id": int}
         """
         results = {}
-        semaphore = asyncio.Semaphore(10) # Max 10 concurrent probes
+        # Reduced from 10 to 3 to prevent overwhelming Telegram API
+        semaphore = asyncio.Semaphore(3)
+        probe_count = [0]  # Mutable counter for delay logic
 
         async def _worker(file_info):
             async with semaphore:
+                # Add small delay every 3 probes to prevent rate limiting
+                probe_count[0] += 1
+                if probe_count[0] > 1 and probe_count[0] % 3 == 0:
+                    await asyncio.sleep(0.5)
+                
                 # 1. Semantic Parse (Always runs)
                 semantic = StreamProbe.semantic_parse(file_info["filename"])
                 
@@ -212,7 +219,8 @@ class StreamProbe:
                          
                 except Exception as e:
                     error = str(e)
-                    LOGGER.error(f"Probe failed for {file_info.get('id')}: {e}")
+                    # Log at debug level for probes (they fail often for deleted files)
+                    LOGGER.debug(f"Probe failed for {file_info.get('id')}: {e}")
 
                 # 3. Merge
                 if "error" in probe_data:
@@ -240,8 +248,8 @@ class StreamProbe:
     @staticmethod
     async def probe_telegram_file(client, chat_id: int, msg_id: int) -> Dict[str, Any]:
         """
-        Downloads the first 20MB of a Telegram file to a temp file using ByteStreamer.
-        This uses the robust streaming pipeline (parallel bots, caching, retries).
+        Downloads the first 5MB of a Telegram file to a temp file using ByteStreamer.
+        Reduced from 20MB to 5MB since ffprobe only needs headers/first few frames.
         """
         import os
         import time
@@ -253,59 +261,113 @@ class StreamProbe:
         temp_file = f"/tmp/probe_{chat_id}_{msg_id}_{int(time.time())}.mkv"
         stream_id = f"probe_{secrets.token_hex(6)}"
         
+        async def download_range(streamer, file_id, client_index, offset, part_count, sid):
+            """Download a specific range of the file."""
+            chunk_size = 1024 * 1024  # 1MB
+            data = bytearray()
+            
+            body_gen = streamer.prefetch_stream(
+                file_id=file_id,
+                client_index=client_index,
+                offset=offset,
+                first_part_cut=0,
+                last_part_cut=chunk_size,
+                part_count=part_count,
+                chunk_size=chunk_size,
+                prefetch=1,
+                stream_id=sid,
+                meta={"type": "probe"},
+                parallelism=1,
+                additional_client_indices=[]
+            )
+            
+            try:
+                async with asyncio.timeout(20):
+                    async for chunk in body_gen:
+                        if chunk:
+                            data.extend(chunk)
+            except asyncio.TimeoutError:
+                pass  # Return what we have
+            
+            return bytes(data)
+        
         try:
             # 1. Initialize ByteStreamer
             streamer = ByteStreamer(client)
             
-            # 2. Get File Properties
-            file_id = await streamer.get_file_properties(chat_id, msg_id)
+            # 2. Get File Properties (with timeout)
+            try:
+                file_id = await asyncio.wait_for(
+                    streamer.get_file_properties(chat_id, msg_id),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return {"error": "timeout_getting_file_properties"}
             
             # 3. Determine Client Index
             client_index = next((k for k, v in multi_clients.items() if v == client), 0)
             
-            # 4. Configure Download (First 20MB)
-            chunk_size = 1024 * 1024 # 1MB
-            limit_mb = 20
-            part_count = limit_mb # 20 chunks
+            chunk_size = 1024 * 1024  # 1MB
+            file_size = file_id.file_size
             
-            # Adjust dependencies if file is smaller than 20MB
-            if file_id.file_size < (limit_mb * chunk_size):
-                 part_count = (file_id.file_size // chunk_size) + 1
+            # 4. Smart Download Strategy:
+            # Step 1: Try first 2MB only (works for MKV and fast-start MP4)
+            # Step 2: If no streams, add last 2MB (for slow-start MP4 with moov at end)
             
-            # 5. Start Pipeline
-            # We use prefetch_stream which returns an async generator
-            body_gen = streamer.prefetch_stream(
-                file_id=file_id,
-                client_index=client_index,
-                offset=0,
-                first_part_cut=0,
-                last_part_cut=chunk_size, # Take full chunk
-                part_count=part_count,
-                chunk_size=chunk_size,
-                prefetch=3,
-                stream_id=stream_id,
-                meta={"type": "probe"},
-                parallelism=2,
-                additional_client_indices=[] # Simple probe, no helpers needed usually
-            )
-            
-            # 6. Consume Stream to File
-            downloaded = 0
-            with open(temp_file, "wb") as f:
-                async for chunk in body_gen:
-                     if chunk:
-                         f.write(chunk)
-                         downloaded += len(chunk)
-            
-            if downloaded == 0:
-                return {"error": "download_failed_empty"}
+            # For small files (< 4MB), just download the whole thing
+            if file_size < 4 * chunk_size:
+                part_count = max(1, (file_size // chunk_size) + 1)
+                first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
                 
-            # 7. Probe Temp File
-            return await StreamProbe.probe_file(temp_file)
+                if len(first_data) == 0:
+                    return {"error": "download_failed_empty"}
+                
+                with open(temp_file, "wb") as f:
+                    f.write(first_data)
+                
+                return await StreamProbe.probe_file(temp_file)
+            
+            # Step 1: Download first 2MB only
+            first_data = await download_range(streamer, file_id, client_index, 0, 2, f"{stream_id}_start")
+            
+            if len(first_data) == 0:
+                return {"error": "download_failed_empty"}
+            
+            # Try probe with first chunk only
+            with open(temp_file, "wb") as f:
+                f.write(first_data)
+            
+            result = await StreamProbe.probe_file(temp_file)
+            
+            # Check if we got meaningful data
+            has_video = bool(result.get("video"))
+            has_audio = len(result.get("audio", [])) > 0
+            
+            if has_video or has_audio:
+                LOGGER.debug(f"Probe {stream_id}: Success with first chunk only ({len(first_data)} bytes)")
+                return result
+            
+            # Step 2: First chunk didn't work, download last 2MB for MP4 moov atom
+            LOGGER.debug(f"Probe {stream_id}: First chunk failed, trying with last chunk for MP4 moov")
+            
+            last_offset = max(0, (file_size // chunk_size) - 2)
+            last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
+            
+            if last_data:
+                # Write first + last combined
+                with open(temp_file, "wb") as f:
+                    f.write(first_data)
+                    f.write(last_data)
+                
+                result = await StreamProbe.probe_file(temp_file)
+                LOGGER.debug(f"Probe {stream_id}: Tried with first+last ({len(first_data) + len(last_data)} bytes)")
+            
+            return result
             
         except Exception as e:
-            LOGGER.error(f"TG Probe Error ({stream_id}): {e}")
+            LOGGER.debug(f"TG Probe Error ({stream_id}): {e}")
             return {"error": str(e)}
         finally:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
+
