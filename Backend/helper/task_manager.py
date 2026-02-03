@@ -139,6 +139,8 @@ async def delete_multiple_messages(messages: list):
                 # Attempt deletion with retries
                 max_retries = max(len(multi_clients), 3) if multi_clients else 3
                 success = False
+                failed_bots = []  # Track which bots failed
+                last_error = None
 
                 for attempt in range(max_retries):
                     try:
@@ -155,16 +157,22 @@ async def delete_multiple_messages(messages: list):
                                 await target_client.delete_messages(chat_id=chat_id, message_ids=chunk)
                                 success = True
                             except Exception as final_e:
-                                LOGGER.error(f"Failed batch delete in {chat_id} after FloodWait: {final_e}")
+                                last_error = str(final_e)
+                                failed_bots.append(target_client.name)
                         else:
                             await sleep(wait_time)
                     except Exception as e:
-                        LOGGER.error(f"Batch delete error in {chat_id} using {target_client.name}: {e}")
+                        # Collect failed bot name silently (no per-bot logging)
+                        if target_client.name not in failed_bots:
+                            failed_bots.append(target_client.name)
+                        last_error = str(e)
                         # Try next client on failure
                         target_client = get_next_client()
 
                 if not success:
-                    LOGGER.error(f"Failed to delete batch of {len(chunk)} messages in {chat_id} after {max_retries} attempts")
+                    # Single consolidated error log
+                    error_short = last_error.split("Pyrogram")[0].strip() if last_error else "Unknown error"
+                    LOGGER.error(f"Batch delete failed in {chat_id}: {len(chunk)} msgs, tried bots [{', '.join(failed_bots[:5])}{'...' if len(failed_bots) > 5 else ''}] - {error_short}")
 
     # Create tasks for each bot's message group
     tasks = []

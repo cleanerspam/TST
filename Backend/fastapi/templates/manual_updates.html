@@ -39,8 +39,8 @@
                 <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
             </button>
             <button onclick="TriggerAutoResolve()" id="auto-resolve-btn"
-                class="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-4 py-2 rounded shadow-lg transition-all flex items-center space-x-2 border border-white/10 group">
-                <i class="fas fa-magic group-hover:animate-pulse"></i> <span>Auto-Resolve Page</span>
+                class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
+                <i class="fas fa-magic"></i> <span>Auto-Resolve Page</span>
             </button>
         </div>
     </div>
@@ -411,6 +411,7 @@
             const card = document.createElement('div');
             card.className = "theme-card rounded-lg overflow-hidden shadow-lg border border-gray-700/50 mb-3";
             card.id = `card-${cardId}`;
+            card.setAttribute('data-pending-id', cardId);
 
             // DECIDE LAYOUT BASED ON CANDIDATE COUNT
             let rightColumnHtml = '';
