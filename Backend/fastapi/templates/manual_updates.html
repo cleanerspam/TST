@@ -52,41 +52,36 @@
     </div>
 
     <!-- Auto-Resolve Banner Removed -->
-    class="px-6 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transition-transform
-    active:scale-95 font-bold">
-    Submit Now
-    </button>
-</div>
-</div>
 
-<!-- Loading State -->
-<div id="loading" class="hidden text-center py-12">
-    <i class="fas fa-spinner fa-spin text-4xl text-primary"></i>
-    <p class="mt-4 theme-text-secondary">Loading pending updates...</p>
-</div>
 
-<!-- Empty State -->
-<div id="empty-state" class="hidden text-center py-12 theme-card rounded-lg">
-    <i class="fas fa-check-circle text-4xl text-green-500 mb-4"></i>
-    <h3 class="text-xl font-bold theme-text">All Caught Up!</h3>
-    <p class="theme-text-secondary">No pending updates found.</p>
-</div>
+    <!-- Loading State -->
+    <div id="loading" class="hidden text-center py-12">
+        <i class="fas fa-spinner fa-spin text-4xl text-primary"></i>
+        <p class="mt-4 theme-text-secondary">Loading pending updates...</p>
+    </div>
 
-<!-- Grid -->
-<div id="updates-grid" class="grid grid-cols-1 gap-6 mb-8">
-    <!-- Cards injected here -->
-</div>
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-12 theme-card rounded-lg">
+        <i class="fas fa-check-circle text-4xl text-green-500 mb-4"></i>
+        <h3 class="text-xl font-bold theme-text">All Caught Up!</h3>
+        <p class="theme-text-secondary">No pending updates found.</p>
+    </div>
 
-<!-- Load More Button -->
-<div class="text-center mt-8">
-    <button id="load-more-btn" onclick="loadMore()"
-        class="hidden theme-card hover:bg-opacity-80 px-6 py-3 rounded-full transition-colors font-medium">
-        Load More
-    </button>
-    <p id="load-count" class="text-sm theme-text-secondary mt-3"></p>
-</div>
+    <!-- Grid -->
+    <div id="updates-grid" class="grid grid-cols-1 gap-6 mb-8">
+        <!-- Cards injected here -->
+    </div>
 
-<!-- Quick Check Floating Stats (Optional, maybe just count) -->
+    <!-- Load More Button -->
+    <div class="text-center mt-8">
+        <button id="load-more-btn" onclick="loadMore()"
+            class="hidden theme-card hover:bg-opacity-80 px-6 py-3 rounded-full transition-colors font-medium">
+            Load More
+        </button>
+        <p id="load-count" class="text-sm theme-text-secondary mt-3"></p>
+    </div>
+
+    <!-- Quick Check Floating Stats (Optional, maybe just count) -->
 </div>
 
 <!-- Bottom Sticky Bar -->

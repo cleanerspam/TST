@@ -40,6 +40,11 @@ class QualityArbiter:
         if str(file_info.get("dc_id", "")).strip() == "4":
             score += 200
             breakdown.append("DC4 Source (+200)")
+
+        # mkvCinemas Preference
+        if "mkvcinemas" in filename:
+            score += 150
+            breakdown.append("mkvCinemas Source (+150)")
             
         # Container Type
         container = probe_data.get("container", "").lower()
@@ -201,7 +206,17 @@ class QualityArbiter:
             return "keep_old"
             
         # 2. Tie-Breaker (Efficiency)
-        # If score is roughly same (+- 50), prefer smaller file
+        # If score is roughly same (+- 100), check size threshold
+        
+        size_diff_mb = abs(new_size - old_size) / (1024 * 1024)
+        
+        if size_diff_mb < 200:
+             # Treat as effectively equal size -> Prefer New if Score is slightly better or equal
+             if s_new >= s_old:
+                 return "keep_new"
+             return "keep_old"
+
+        # If size diff is significant, prefer smaller file if scores are close
         if new_size < old_size:
             return "keep_new"
         
