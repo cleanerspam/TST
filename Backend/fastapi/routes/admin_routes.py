@@ -324,14 +324,22 @@ async def analyze_updates_route(
     """
     Trigger Deep Inspection & Scoring for a batch of pending updates.
     """
+    from Backend.common.logger import LOGGER
+    import traceback
+    
     pending_ids = payload.get("pending_ids", [])
+    LOGGER.info(f"Analyze request received with {len(pending_ids)} pending_ids")
+    
     if not pending_ids:
         raise HTTPException(status_code=400, detail="No pending_ids provided")
         
     try:
         results = await db.analyze_pending_items(pending_ids)
+        LOGGER.info(f"Analyze completed: {len(results)} results")
         return {"results": results}
     except Exception as e:
+        LOGGER.error(f"Analyze failed: {e}")
+        LOGGER.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/updates/bulk_resolve")

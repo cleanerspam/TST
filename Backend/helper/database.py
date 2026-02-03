@@ -2910,7 +2910,7 @@ class Database:
             if not old_info:
                 # Find best among candidates
                 best_candidate_id = None
-                best_score = {"total": -9999}
+                best_score = {"total_score": -9999}
                 
                 for doc in docs:
                     p_id = str(doc["_id"])
@@ -2920,7 +2920,7 @@ class Database:
                     p_data_new = p_new.get("probe", {})
                     score_new = QualityArbiter.calculate_score(p_data_new, s_tags_new, new_info)
                     
-                    if score_new["total"] > best_score["total"]:
+                    if score_new["total_score"] > best_score["total_score"]:
                         best_score = score_new
                         best_candidate_id = p_id
                 
@@ -2959,7 +2959,7 @@ class Database:
                 })
             
             # Sort by score (highest first)
-            candidate_scores.sort(key=lambda x: x["score"]["total"], reverse=True)
+            candidate_scores.sort(key=lambda x: x["score"]["total_score"], reverse=True)
             best_candidate = candidate_scores[0]
             
             # Compare BEST candidate vs OLD file
