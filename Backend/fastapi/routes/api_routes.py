@@ -22,6 +22,10 @@ async def get_system_stats_api():
         PRUNE_SECONDS = 3
         # Use list() to allow modification of dict during iteration
         for pipeline_id, info in list(ACTIVE_STREAMS.items()):
+            # Skip probe streams (internal file analysis)
+            if pipeline_id.startswith("probe_") or info.get("stream_id", "").startswith("probe_"):
+                continue
+            
             status = info.get("status")
             # Use end_ts if available, else last_ts, else now
             stop_time = info.get("end_ts", info.get("last_ts", now))

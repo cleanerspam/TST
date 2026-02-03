@@ -1020,20 +1020,18 @@ class ByteStreamer:
                         else:
                             try:
                                 from Backend.config import Telegram
-                                cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 30)
+                                # Use 5s delay for probe streams, normal delay for others
+                                if stream_id.startswith("probe_"):
+                                    cleanup_delay = 5
+                                else:
+                                    cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 30)
                             except:
-                                cleanup_delay = 30
+                                cleanup_delay = 5 if stream_id.startswith("probe_") else 30
                             LOGGER.info(f"Stream {stream_id[:8]} (Pipe {pipeline_id}): Starting delayed cleanup ({cleanup_delay}s)")
-                            pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(pipeline_id, pipeline))
+                            pipeline.delayed_cleanup_task = asyncio.create_task(self._delayed_cleanup(pipeline_id, pipeline, cleanup_delay))
 
-    async def _delayed_cleanup(self, pipeline_id: str, pipeline: StreamPipeline):
-        # Enhancement 14: Configurable cleanup delay
-        try:
-            from Backend.config import Telegram
-            cleanup_delay = getattr(Telegram, 'STREAM_CLEANUP_DELAY', 10)
-        except:
-            cleanup_delay = 10
-        
+    async def _delayed_cleanup(self, pipeline_id: str, pipeline: StreamPipeline, cleanup_delay: int = 10):
+        # Enhancement 14: Configurable cleanup delay (now passed as parameter)
         LOGGER.debug(f"DEBUG: Pipeline {pipeline_id[-8:]}: Delayed cleanup started (wait={cleanup_delay}s). Current ref_count={pipeline.ref_count}")
         try:
             await asyncio.sleep(cleanup_delay)
