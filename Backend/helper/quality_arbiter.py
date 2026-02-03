@@ -41,14 +41,14 @@ class QualityArbiter:
             score += 200
             breakdown.append("DC4 Source (+200)")
 
+        # Container Type & Filename
+        container = probe_data.get("container", "").lower()
+        filename = file_info.get("filename", "").lower()
+
         # mkvCinemas Preference
         if "mkvcinemas" in filename:
             score += 150
             breakdown.append("mkvCinemas Source (+150)")
-            
-        # Container Type
-        container = probe_data.get("container", "").lower()
-        filename = file_info.get("filename", "").lower()
         
         if "mkv" in container or filename.endswith(".mkv"):
             score += 100
