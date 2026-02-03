@@ -2795,6 +2795,40 @@ class Database:
     # -------------------------------------------------------------------------
     # SMART UPGRADE V9 - ANALYSIS ENGINE
     # -------------------------------------------------------------------------
+    def _parse_size(self, size_val) -> int:
+        """Parse size value which could be int, string bytes, or human-readable like '2.16GB'."""
+        if size_val is None:
+            return 0
+        if isinstance(size_val, int):
+            return size_val
+        if isinstance(size_val, float):
+            return int(size_val)
+        if isinstance(size_val, str):
+            size_val = size_val.strip().upper()
+            if not size_val:
+                return 0
+            # Try direct int conversion first
+            try:
+                return int(size_val)
+            except ValueError:
+                pass
+            # Parse human-readable format
+            multipliers = {
+                'B': 1,
+                'KB': 1024,
+                'MB': 1024**2,
+                'GB': 1024**3,
+                'TB': 1024**4,
+            }
+            for suffix, mult in multipliers.items():
+                if size_val.endswith(suffix):
+                    try:
+                        num = float(size_val[:-len(suffix)])
+                        return int(num * mult)
+                    except ValueError:
+                        return 0
+        return 0
+    
     async def analyze_pending_items(self, pending_ids: List[str]):
         """
         Orchestrates the Deep Inspection & Scoring for a batch of pending updates.
@@ -2965,7 +2999,8 @@ class Database:
             # Compare BEST candidate vs OLD file
             decision = QualityArbiter.compare(
                 score_old, best_candidate["score"],
-                int(old_info.get("size", 0)), int(best_candidate["info"].get("size", 0))
+                self._parse_size(old_info.get("size", 0)), 
+                self._parse_size(best_candidate["info"].get("size", 0))
             )
             
             # Set results for ALL candidates in this group
