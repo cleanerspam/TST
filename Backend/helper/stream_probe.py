@@ -365,7 +365,7 @@ class StreamProbe:
                         LOGGER.warning(f"Chunk 0 download failed for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1})")
                         raise Exception("Empty Data")
 
-                    global probe_success_count
+                    global probe_success_count, probe_failure_count, current_batch_total
                     probe_success_count += 1
                     completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
                     LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
@@ -380,7 +380,7 @@ class StreamProbe:
                     LOGGER.warning(f"Chunk 0 download failed for client {client_index} (attempt {attempt+1})")
                     raise Exception("Empty Data")
 
-                global probe_success_count
+                global probe_success_count, probe_failure_count, current_batch_total
                 probe_success_count += 1
                 completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
                 LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
@@ -390,7 +390,7 @@ class StreamProbe:
                 
                 result = await StreamProbe.probe_file(temp_file)
                 if result.get("video") or result.get("audio"):
-                    global probe_success_count
+                    global probe_success_count, probe_failure_count, current_batch_total
                     probe_success_count += 1
                     completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
                     LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
@@ -407,7 +407,7 @@ class StreamProbe:
                         f.write(last_data)
                     result = await StreamProbe.probe_file(temp_file)
                     if result.get("video") or result.get("audio"):
-                        global probe_success_count
+                        global probe_success_count, probe_failure_count, current_batch_total
                         probe_success_count += 1
                         completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
                         LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed using both chunks for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
@@ -420,7 +420,7 @@ class StreamProbe:
             except Exception as e:
                 # Also increment failure counter for exceptions during probing
                 if "Empty Data" in str(e) or "All bots failed" in str(e):
-                    global probe_failure_count
+                    global probe_success_count, probe_failure_count, current_batch_total
                     probe_failure_count += 1
                     completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
                     LOGGER.warning(f"FFPROBE EXCEPTION: Failed to download chunk 0 for file (chat_id={chat_id}, msg_id={msg_id}), error: {e} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
@@ -435,7 +435,7 @@ class StreamProbe:
         # If loop finishes without return
         failed_count = len(available_clients)  # Number of bots that failed
         from Backend.logger import LOGGER
-        global probe_failure_count
+        global probe_success_count, probe_failure_count, current_batch_total
         probe_failure_count += 1
         completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
         LOGGER.error(f"FFPROBE FAILED for file (chat_id={chat_id}, msg_id={msg_id}): All {failed_count} bots failed to get chunk 0. Last error: {last_error} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
