@@ -9,6 +9,12 @@ from Backend.config import Telegram
 from Backend.helper.task_manager import get_next_client, multi_clients
 from Backend.logger import LOGGER
 
+# Module-level counters for tracking probe statistics
+# These will be reset for each batch of files
+probe_success_count = 0
+probe_failure_count = 0
+current_batch_total = 0  # Track the total files in the current batch
+
 class StreamProbe:
     """
     Handles deep inspection of media files via:
@@ -354,8 +360,15 @@ class StreamProbe:
                 if file_size < 4 * chunk_size:
                     part_count = max(1, (file_size // chunk_size) + 1)
                     first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
-                    
-                    if not first_data: raise Exception("Empty Data")
+
+                    if not first_data:
+                        LOGGER.warning(f"Chunk 0 download failed for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1})")
+                        raise Exception("Empty Data")
+
+                    global probe_success_count
+                    probe_success_count += 1
+                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+                    LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
 
                     with open(temp_file, "wb") as f:
                         f.write(first_data)
@@ -363,28 +376,55 @@ class StreamProbe:
                 
                 # Step 1: Download first 2MB
                 first_data = await download_range(streamer, file_id, client_index, 0, 2, f"{stream_id}_start")
-                if not first_data: raise Exception("Empty Data")
-                
+                if not first_data:
+                    LOGGER.warning(f"Chunk 0 download failed for client {client_index} (attempt {attempt+1})")
+                    raise Exception("Empty Data")
+
+                global probe_success_count
+                probe_success_count += 1
+                completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+                LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
+
                 with open(temp_file, "wb") as f:
                     f.write(first_data)
                 
                 result = await StreamProbe.probe_file(temp_file)
                 if result.get("video") or result.get("audio"):
+                    global probe_success_count
+                    probe_success_count += 1
+                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+                    LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
                     return result
                     
                 # Step 2: Last chunk (for MP4)
                 last_offset = max(0, (file_size // chunk_size) - 2)
                 last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
-                
+
                 if last_data:
+                    LOGGER.info(f"FFPROBE PARTIAL SUCCESS: First chunk succeeded but no media data, using last chunk for file (chat_id={chat_id}, msg_id={msg_id}) - additional {len(last_data)} bytes")
                     with open(temp_file, "wb") as f:
                         f.write(first_data)
                         f.write(last_data)
-                    return await StreamProbe.probe_file(temp_file)
-                
+                    result = await StreamProbe.probe_file(temp_file)
+                    if result.get("video") or result.get("audio"):
+                        global probe_success_count
+                        probe_success_count += 1
+                        completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+                        LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed using both chunks for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
+                    return result
+                else:
+                    LOGGER.warning(f"FFPROBE PARTIAL: First chunk succeeded but last chunk failed for file (chat_id={chat_id}, msg_id={msg_id})")
+
                 return result # Return whatever we got
 
             except Exception as e:
+                # Also increment failure counter for exceptions during probing
+                if "Empty Data" in str(e) or "All bots failed" in str(e):
+                    global probe_failure_count
+                    probe_failure_count += 1
+                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+                    LOGGER.warning(f"FFPROBE EXCEPTION: Failed to download chunk 0 for file (chat_id={chat_id}, msg_id={msg_id}), error: {e} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
+
                 # LOGGER.warning(f"Probe attempt {attempt+1} failed: {e}")
                 last_error = e
                 # Clean up and continue to next bot
@@ -393,5 +433,45 @@ class StreamProbe:
                 continue
 
         # If loop finishes without return
+        failed_count = len(available_clients)  # Number of bots that failed
+        from Backend.logger import LOGGER
+        global probe_failure_count
+        probe_failure_count += 1
+        completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+        LOGGER.error(f"FFPROBE FAILED for file (chat_id={chat_id}, msg_id={msg_id}): All {failed_count} bots failed to get chunk 0. Last error: {last_error} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
         return {"error": f"All bots failed. Last error: {last_error}"}
+
+
+def get_probe_statistics():
+    """
+    Returns the current probe statistics
+    """
+    return {
+        "successful_probes": probe_success_count,
+        "failed_probes": probe_failure_count,
+        "total_probes": probe_success_count + probe_failure_count,
+        "batch_total": current_batch_total,
+        "success_rate": (probe_success_count / (probe_success_count + probe_failure_count) * 100) if (probe_success_count + probe_failure_count) > 0 else 0,
+        "completion_rate": ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
+    }
+
+
+def reset_batch_counters(batch_total=0):
+    """
+    Resets the counters for a new batch of files
+    """
+    global probe_success_count, probe_failure_count, current_batch_total
+    probe_success_count = 0
+    probe_failure_count = 0
+    current_batch_total = batch_total
+    LOGGER.info(f"FFPROBE BATCH RESET: Starting new batch with {batch_total} files")
+
+
+def log_probe_statistics():
+    """
+    Logs the current probe statistics
+    """
+    stats = get_probe_statistics()
+    batch_info = f" (Batch Total: {current_batch_total})" if current_batch_total > 0 else ""
+    LOGGER.info(f"FFPROBE STATISTICS: Total={stats['total_probes']}, Successful={stats['successful_probes']}, Failed={stats['failed_probes']}, Success Rate={stats['success_rate']:.2f}%{batch_info}")
 
