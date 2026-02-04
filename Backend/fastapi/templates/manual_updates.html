@@ -22,6 +22,42 @@
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
             background: rgba(100, 100, 100, 0.8);
         }
+
+        /* Scanning Animation */
+        @keyframes scan-pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4);
+            }
+
+            70% {
+                box-shadow: 0 0 0 10px rgba(79, 70, 229, 0);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(79, 70, 229, 0);
+            }
+        }
+
+        .scanning-active {
+            animation: scan-pulse 1.5s infinite;
+            border-color: rgba(79, 70, 229, 0.6) !important;
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
+        }
+
+        .shimmer-bar {
+            background: linear-gradient(90deg, transparent, rgba(79, 70, 229, 0.2), transparent);
+            background-size: 200% 100%;
+            animation: shimmer 2s infinite linear;
+        }
     </style>
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
         <div>
@@ -40,8 +76,15 @@
             </button>
 
             <!-- Auto-Resolve Toggle -->
-            <div class="flex items-center space-x-3 theme-card px-4 py-2 rounded border border-gray-700/50">
-                <span class="text-sm font-bold theme-text">Auto-Resolve</span>
+            <div id="auto-resolve-container"
+                class="flex items-center space-x-3 theme-card px-4 py-2 rounded border border-gray-700/50 transition-all duration-300">
+                <div class="flex flex-col items-start translate-y-0.5">
+                    <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest hidden"
+                        id="auto-resolve-status">
+                        <i class="fas fa-microchip fa-spin mr-1"></i> Analyzing
+                    </span>
+                    <span class="text-sm font-bold theme-text">Auto-Resolve</span>
+                </div>
                 <button id="auto-resolve-toggle" onclick="toggleAutoResolveMode()" role="switch" aria-checked="false"
                     class="bg-gray-700 relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
                     <span aria-hidden="true"
@@ -435,7 +478,11 @@
                                         ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
                                         <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
                                     </div>
-                                    <div class="text-[10px] italic text-gray-400 mt-1">Added: ${new Date(cand.created_at).toLocaleDateString()}</div>
+                                     <div class="text-[10px] italic text-gray-400 mt-1">Added: ${new Date(cand.created_at).toLocaleDateString()}</div>
+                                </div>
+                                <!-- Score Breakdown Section -->
+                                <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-${cid}">
+                                    <!-- Points injected here -->
                                 </div>
                             </div>
                         </div>
@@ -555,8 +602,12 @@
                                             <div class="flex justify-between items-center">
                                                 <span>Size: <span class="text-gray-900 font-bold">${oldFile.file_size || oldFile.size || 'N/A'}</span></span>
                                                 ${oldFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300" title="Data Center ID">DC: <span class="text-gray-900 font-bold">${oldFile.dc_id}</span></span>` : ''}
-                                                <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${fType}</span>
+                                                 <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${fType}</span>
                                             </div>
+                                        </div>
+                                        <!-- Score Breakdown Section (Old) -->
+                                        <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-old-${cardId}">
+                                            <!-- Points injected here -->
                                         </div>
                                     </div>
                                     `;
@@ -1118,10 +1169,9 @@
     async function TriggerAutoResolve() {
         if (isAutoResolving) return;
 
-        // Visual indicator that it's running (on the toggle or separate?)
-        // The toggle is already green. Maybe show a toast or just proceed.
-        // If triggered by Load More, we might not want to disable anything immediately if it's seamless.
-        // But let's keep the spinner logic for now if specific button was used, OR just show toast.
+        // START Visual indicator that it's running
+        document.getElementById('auto-resolve-status').classList.remove('hidden');
+        document.getElementById('auto-resolve-container').classList.add('scanning-active');
 
         isAutoResolving = true;
 
@@ -1182,9 +1232,10 @@
             console.error(e);
             showToast("Analysis failed after retries. Please try again.", "error");
             resetAutoResolveUI(); // This resets the lock
-            // Should we turn off mode? Maybe not on network error, just let user retry.
         } finally {
-            // remove busy state if we had one
+            // STOP Visual indicator
+            document.getElementById('auto-resolve-status').classList.add('hidden');
+            document.getElementById('auto-resolve-container').classList.remove('scanning-active');
         }
     }
 
@@ -1272,6 +1323,23 @@
                         </div>
                     `;
                     breakdownEl.classList.remove('hidden');
+                }
+            }
+
+            // --- OLD SCORE BREAKDOWN INJECTION (Per Card) ---
+            if (res.old_score && res.old_score.breakdown) {
+                const oldBreakdownEl = document.getElementById(`score-breakdown-old-${card.id.replace('card-', '')}`);
+                if (oldBreakdownEl && oldBreakdownEl.classList.contains('hidden')) { // Only inject once per card
+                    oldBreakdownEl.innerHTML = `
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="font-bold text-red-600">Current Quality: ${res.old_score.total_score} pts</span>
+                            ${res.old_score.has_perfect_combo ? '<span class="text-[9px] bg-yellow-500/20 text-yellow-500 px-1 rounded border border-yellow-500/30">PERFECT COMBO</span>' : ''}
+                        </div>
+                        <div class="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-80">
+                            ${res.old_score.breakdown.map(b => `<div>• ${b}</div>`).join('')}
+                        </div>
+                    `;
+                    oldBreakdownEl.classList.remove('hidden');
                 }
             }
 
