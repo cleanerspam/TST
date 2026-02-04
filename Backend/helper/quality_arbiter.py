@@ -38,7 +38,7 @@ class QualityArbiter:
         # 2. Hierarchical Storage & Source Rules
         # ---------------------------------------------------------------------
         # Preferred Uploaders List (Ranked High to Low)
-        PREFERRED_UPLOADERS = ["psa", "galatone", "mkvcinemas"] 
+        PREFERRED_UPLOADERS = ["psa", "immortal", "asur", "mkvcinemas", "pahe", "skymovieshd"] 
         
         filename = file_info.get("filename", file_info.get("name", "")).lower()
         uploader_bonus = 300 # Default for non-preferred
