@@ -19,48 +19,86 @@ class QualityArbiter:
         # ---------------------------------------------------------------------
         # 1. Base Score (Resolution)
         # ---------------------------------------------------------------------
-        # Use Semantic as Truth if Probe misses
+        # Use Granular Height if available, otherwise Semantic tags
         p_height = probe_data.get("video", {}).get("height", 0)
         s_1080p = semantic_tags.get("is_1080p", False)
         
-        if p_height >= 1000 or s_1080p:
-            score += 1000
-            breakdown.append("Base 1080p (+1000)")
-        elif p_height >= 700:
-            score += 700
-            breakdown.append("Base 720p (+700)")
+        if p_height > 0:
+            score += p_height * 2
+            breakdown.append(f"Base Resolution Height (x2) (+{p_height * 2})")
+        elif s_1080p:
+            score += 1080 * 2
+            breakdown.append("Base Semantic 1080p (+2160)")
         else:
-            score += 480
-            breakdown.append("Base SD (+480)")
+            # Fallback for SD or missing height
+            score += 480 * 2
+            breakdown.append("Base SD Fallback (+960)")
 
         # ---------------------------------------------------------------------
-        # 2. Storage & Source Rules
+        # 2. Hierarchical Storage & Source Rules
         # ---------------------------------------------------------------------
-        # DC4 Bonus
+        # Preferred Uploaders List (Ranked High to Low)
+        PREFERRED_UPLOADERS = ["psa", "galatone", "mkvcinemas"] 
+        
+        filename = file_info.get("filename", file_info.get("name", "")).lower()
+        uploader_bonus = 300 # Default for non-preferred
+        found_uploader = None
+        
+        for idx, uploader in enumerate(PREFERRED_UPLOADERS):
+            if uploader.lower() in filename:
+                # Formula: 310 + (ranks above lowest) * 10
+                # If idx=0 (Top) and len=3, bonus = 310 + (3-1-0)*10 = 330
+                # If idx=2 (Bottom) and len=3, bonus = 310 + (3-1-2)*10 = 310
+                uploader_bonus = 310 + (len(PREFERRED_UPLOADERS) - 1 - idx) * 10
+                found_uploader = uploader
+                break
+        
+        score += uploader_bonus
+        if found_uploader:
+            breakdown.append(f"Preferred Uploader: {found_uploader} (+{uploader_bonus})")
+        else:
+            breakdown.append("Standard Source (+300)")
+
+        # DC4 Preference (+50 per user request)
         if str(file_info.get("dc_id", "")).strip() == "4":
-            score += 200
-            breakdown.append("DC4 Source (+200)")
+            score += 50
+            breakdown.append("DC4 Source (+50)")
 
-        # File Type Preference (Video > Document)
+        # Video Type Preference (+20 per user request)
         f_type = str(file_info.get("file_type", "video")).lower()
-        if f_type == "document":
-            score -= 100
+        if f_type == "video":
+            score += 20
+            breakdown.append("Video Type Bonus (+20)")
+        elif f_type == "document":
+            score -= 100 # Keep existing penalty for documents if necessary, but user wants +20 for video
             breakdown.append("Document Type Penalty (-100)")
 
-        # Container Type & Filename
-        container = probe_data.get("container", "").lower()
-        filename = file_info.get("filename", file_info.get("name", "")).lower()
-
-        # mkvCinemas Preference
-        if "mkvcinemas" in filename:
-            score += 150
-            breakdown.append("mkvCinemas Source (+150)")
+        # ---------------------------------------------------------------------
+        # 3. Combo & Container Rules
+        # ---------------------------------------------------------------------
+        # Perfect Combo Detection
+        audio_tracks = probe_data.get("audio", [])
+        langs = [t.get("lang", "und") for t in audio_tracks]
+        has_hin = any("hi" in l or "hin" in l for l in langs) or semantic_tags.get("is_dual_audio")
+        has_eng = any("en" in l or "eng" in l for l in langs)
         
+        subs = probe_data.get("subtitle", [])
+        sub_langs = [s.get("lang", "und") for s in subs]
+        probe_has_eng = any("en" in l or "eng" in l for l in sub_langs) or semantic_tags.get("sub_combo") in ["eng", "hin_eng"]
+        
+        has_perfect_combo = has_hin and has_eng and probe_has_eng
+        
+        if has_perfect_combo:
+            score += 250
+            breakdown.append("Perfect Combo: Dual Audio + Eng Subs (+250)")
+
+        # Container Rules
+        container = probe_data.get("container", "").lower()
         if "mkv" in container or filename.endswith(".mkv"):
             score += 100
             breakdown.append("MKV Container (+100)")
         
-        # Stricter MP4 Penalty (Check filename for 'mp4' causing it to be penalized even if ext is mkv)
+        # Stricter MP4 Penalty
         if "mp4" in container or "mp4" in filename or filename.endswith(".mp4"):
             score -= 5000
             breakdown.append("MP4 Container/Name (-5000)")
@@ -76,8 +114,8 @@ class QualityArbiter:
             score += 100
             breakdown.append("HEVC/x265 (+100)")
         elif "h264" in v_codec or "avc" in v_codec:
-            score += 50
-            breakdown.append("AVC/x264 (+50)")
+            score += 90
+            breakdown.append("AVC/x264 (+90)")
             
         # 10-bit Color
         depth = probe_data.get("video", {}).get("depth", 8)
@@ -192,6 +230,8 @@ class QualityArbiter:
         return {
             "total_score": score,
             "breakdown": breakdown,
+            "has_perfect_combo": has_perfect_combo,
+            "height": p_height,
             "can_auto_resolve": score > 0
         }
 
@@ -203,9 +243,34 @@ class QualityArbiter:
         s_old = old_score["total_score"]
         s_new = new_score["total_score"]
         
+        # ---------------------------------------------------------------------
+        # 1. Perfect Combo Tie-Breaker (User Request: Resolution-Aware Size Savings)
+        # ---------------------------------------------------------------------
+        if old_score.get("has_perfect_combo") and new_score.get("has_perfect_combo"):
+            h = old_score.get("height", 0)
+            # Thresholds in bytes
+            if h >= 1000:
+                threshold = 250 * 1024 * 1024
+            elif h >= 700:
+                threshold = 100 * 1024 * 1024
+            else:
+                threshold = 50 * 1024 * 1024
+            
+            size_diff = abs(new_size - old_size)
+            
+            if size_diff > threshold:
+                if new_size < old_size:
+                    LOGGER.info(f"DECISION: Keep New (Both have Perfect Combo, New is significantly Smaller: -{size_diff/1024/1024:.1f}MB)")
+                    return "keep_new"
+                else:
+                    LOGGER.info(f"DECISION: Keep Old (Both have Perfect Combo, Old is significantly Smaller: -{size_diff/1024/1024:.1f}MB)")
+                    return "keep_old"
+            else:
+                LOGGER.info(f"DECISION: Standard Compare (Size diff {size_diff/1024/1024:.1f}MB < threshold {threshold/1024/1024}MB)")
+
         diff = s_new - s_old
         
-        # 1. Clear Winner (> 100 pts) 
+        # 2. Clear Winner (> 100 pts) 
         if diff > 100:
             LOGGER.info(f"DECISION: Keep New (Clear Winner +{diff})")
             return "keep_new"
