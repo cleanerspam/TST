@@ -225,6 +225,10 @@ class StreamProbe:
                 probe_data = {}
                 error = None
                 
+                # Safety Check: Warn if missing download context
+                if "tg_file_ref" not in file_info and "link" not in file_info:
+                    LOGGER.warning(f"PROBE SKIP: Missing download context for [{file_info.get('id')}]. Will use semantic fallback only.")
+                
                 try:
                     # A. Telegram Partial Download (Preferred)
                     if "tg_file_ref" in file_info:

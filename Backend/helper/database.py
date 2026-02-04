@@ -2917,10 +2917,33 @@ class Database:
             
             if old_file:
                 fname_old = old_file.get("name", "Unknown.mkv")
-                files_to_probe.append({
+                probe_payload_old = {
                     "id": f"old_{group_key_str}",
                     "filename": fname_old
-                })
+                }
+                
+                # CRITICAL: Add tg_file_ref so old file gets LIVE PROBED instead of semantic fallback
+                if "id" in old_file:
+                    try:
+                        decoded = await decode_string(old_file["id"])
+                        chat_id = int(f"-100{decoded['chat_id']}")
+                        msg_id = int(decoded['msg_id'])
+                        
+                        # Assign bot using same round-robin logic
+                        bot_idx = bot_indices[probe_counter[0] % num_bots]
+                        probe_counter[0] += 1
+                        client = multi_clients.get(bot_idx)
+                        
+                        probe_payload_old["tg_file_ref"] = {
+                            "client": client,
+                            "client_index": bot_idx,
+                            "chat_id": chat_id,
+                            "msg_id": msg_id
+                        }
+                    except Exception as e:
+                        LOGGER.warning(f"Failed to decode ID for old file probe {group_key_str}: {e}")
+                
+                files_to_probe.append(probe_payload_old)
 
         # 4. Parallel Probe
         probe_results = await StreamProbe.parallel_probe(files_to_probe)
