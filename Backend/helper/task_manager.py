@@ -3,6 +3,7 @@ from pyrogram.errors import FloodWait, MessageDeleteForbidden
 from Backend.logger import LOGGER
 from Backend.pyrofork.bot import Helper, multi_clients
 from itertools import cycle
+from datetime import datetime
 
 async def edit_message(chat_id: int, msg_id: int, new_caption: str):
     try:
@@ -82,10 +83,27 @@ async def delete_message(chat_id: int, msg_id: int):
             continue # Try next client
 
         except Exception as e:
+            last_error = e
             LOGGER.error(f"Error while deleting message {msg_id} in {chat_id} using Client: {client.name}: {e}")
             continue
 
+    # All retries exhausted - add to junk database
     LOGGER.error(f"Failed to delete message {msg_id} in {chat_id} after {max_retries} attempts.")
+    
+    # Add all failed deletions to require_user_delete
+    if 'last_error' in locals():
+        error_msg = str(last_error)
+        try:
+            from Backend import db
+            await db.dbs["tracking"]["require_user_delete"].insert_one({
+                "chat_id": chat_id,
+                "msg_id": msg_id,
+                "created_at": datetime.utcnow(),
+                "reason": f"Message deletion failed: {error_msg[:200]}"  # Limit error message length
+            })
+            LOGGER.info(f"Added message {msg_id} from {chat_id} to junk database due to deletion failure")
+        except Exception as db_error:
+            LOGGER.error(f"Failed to add failed deletion to junk database: {db_error}")
 
 async def delete_multiple_messages(messages: list):
     """
@@ -173,6 +191,25 @@ async def delete_multiple_messages(messages: list):
                     # Single consolidated error log
                     error_short = last_error.split("Pyrogram")[0].strip() if last_error else "Unknown error"
                     LOGGER.error(f"Batch delete failed in {chat_id}: {len(chunk)} msgs, tried bots [{', '.join(failed_bots[:5])}{'...' if len(failed_bots) > 5 else ''}] - {error_short}")
+                    
+                    # Add all failed messages from this chunk to junk database
+                    if last_error:
+                        try:
+                            from Backend import db
+                            error_msg = last_error[:200]  # Limit error message length
+                            for msg_id in chunk:
+                                try:
+                                    await db.dbs["tracking"]["require_user_delete"].insert_one({
+                                        "chat_id": chat_id,
+                                        "msg_id": msg_id,
+                                        "created_at": datetime.utcnow(),
+                                        "reason": f"Bulk deletion failed: {error_msg}"
+                                    })
+                                except Exception as insert_error:
+                                    LOGGER.error(f"Failed to insert msg {msg_id} to junk database: {insert_error}")
+                            LOGGER.info(f"Added {len(chunk)} failed messages from {chat_id} to junk database")
+                        except Exception as db_error:
+                            LOGGER.error(f"Failed to add failed batch deletions to junk database: {db_error}")
 
     # Create tasks for each bot's message group
     tasks = []
