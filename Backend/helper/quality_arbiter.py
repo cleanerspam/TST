@@ -21,18 +21,56 @@ class QualityArbiter:
         # ---------------------------------------------------------------------
         # Use Granular Height if available, otherwise Semantic tags
         p_height = probe_data.get("video", {}).get("height", 0)
-        s_1080p = semantic_tags.get("is_1080p", False)
         
-        if p_height > 0:
-            score += p_height * 2
-            breakdown.append(f"Base Resolution Height (x2) (+{p_height * 2})")
-        elif s_1080p:
-            score += 1080 * 2
-            breakdown.append("Base Semantic 1080p (+2160)")
+        # Determine Semantic Resolution (if probe failed)
+        s_res = 0
+        s_base = 0
+        
+        if semantic_tags.get("is_4320p"):
+            s_res = 4320
+            s_base = 4320 * 1.5
+            s_text = "Base Semantic 8K (+6480)"
+        elif semantic_tags.get("is_2160p"):
+            s_res = 2160
+            s_base = 2160 * 1.5
+            s_text = "Base Semantic 4K (+3240)"
+        elif semantic_tags.get("is_1080p"):
+            s_res = 1080
+            s_base = 1080 * 1.5
+            s_text = "Base Semantic 1080p (+1620)"
+        elif semantic_tags.get("is_720p"):
+            s_res = 720
+            s_base = 720 * 1.5
+            s_text = "Base Semantic 720p (+1080)"
+        elif semantic_tags.get("is_576p"):
+            s_res = 576
+            s_base = 576 * 1.5
+            s_text = "Base Semantic 576p (+864)"
+        elif semantic_tags.get("is_480p"):
+            s_res = 480
+            s_base = 480 * 1.5
+            s_text = "Base Semantic 480p (+720)"
+        elif semantic_tags.get("is_360p"):
+            s_res = 360
+            s_base = 360 * 1.5
+            s_text = "Base Semantic 360p (+540)"
+        elif semantic_tags.get("is_240p"):
+            s_res = 240
+            s_base = 240 * 1.5
+            s_text = "Base Semantic 240p (+360)"
         else:
-            # Fallback for SD or missing height
-            score += 480 * 2
-            breakdown.append("Base SD Fallback (+960)")
+            # Fallback for completely unknown resolution
+            s_res = 480
+            s_base = 480 * 1.5
+            s_text = "Base SD Fallback (+720)"
+
+        if p_height > 0:
+            val = p_height * 1.5
+            score += val
+            breakdown.append(f"Base Resolution Height (x1.5) (+{val})")
+        else:
+            score += s_base
+            breakdown.append(s_text)
 
         # ---------------------------------------------------------------------
         # 2. Hierarchical Storage & Source Rules

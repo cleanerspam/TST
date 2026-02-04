@@ -23,7 +23,14 @@ class StreamProbe:
         "dual_audio": re.compile(r"\b(dual|multi)[ ._-]?audio\b|\bstart[ ._-]?audio\b", re.IGNORECASE),
         "esub": re.compile(r"\b(esub|e[ ._-]?sub)\b|\beng(lish)?[ ._-]?sub(s|title)?\b", re.IGNORECASE),
         "hsub": re.compile(r"\b(hsub|h[ ._-]?sub)\b|\bhin(di)?[ ._-]?sub(s|title)?\b", re.IGNORECASE),
-        "pseudo_1080p": re.compile(r"1080p?", re.IGNORECASE),
+        "res_8k": re.compile(r"(8k|4320p?)", re.IGNORECASE),
+        "res_4k": re.compile(r"(4k|2160p?)", re.IGNORECASE),
+        "res_1080p": re.compile(r"1080p?", re.IGNORECASE),
+        "res_720p": re.compile(r"720p?", re.IGNORECASE),
+        "res_576p": re.compile(r"576p?", re.IGNORECASE),
+        "res_480p": re.compile(r"480p?", re.IGNORECASE),
+        "res_360p": re.compile(r"360p?", re.IGNORECASE),
+        "res_240p": re.compile(r"240p?", re.IGNORECASE),
         "hevc": re.compile(r"(hevc|x265|h\.?265)", re.IGNORECASE),
         "10bit": re.compile(r"(10[ ._-]?bit|hi10p)", re.IGNORECASE),
         "aac": re.compile(r"\baac\b", re.IGNORECASE),
@@ -41,7 +48,17 @@ class StreamProbe:
             "has_hsub": bool(StreamProbe.PATTERNS["hsub"].search(filename)),
             "is_hevc": bool(StreamProbe.PATTERNS["hevc"].search(filename)),
             "is_10bit": bool(StreamProbe.PATTERNS["10bit"].search(filename)),
-            "is_1080p": bool(StreamProbe.PATTERNS["pseudo_1080p"].search(filename)),
+            
+            # Resolution Tags
+            "is_4320p": bool(StreamProbe.PATTERNS["res_8k"].search(filename)),
+            "is_2160p": bool(StreamProbe.PATTERNS["res_4k"].search(filename)),
+            "is_1080p": bool(StreamProbe.PATTERNS["res_1080p"].search(filename)),
+            "is_720p": bool(StreamProbe.PATTERNS["res_720p"].search(filename)),
+            "is_576p": bool(StreamProbe.PATTERNS["res_576p"].search(filename)),
+            "is_480p": bool(StreamProbe.PATTERNS["res_480p"].search(filename)),
+            "is_360p": bool(StreamProbe.PATTERNS["res_360p"].search(filename)),
+            "is_240p": bool(StreamProbe.PATTERNS["res_240p"].search(filename)),
+
             "has_aac": bool(StreamProbe.PATTERNS["aac"].search(filename)),
             "has_eac3": bool(StreamProbe.PATTERNS["eac3"].search(filename)),
             "has_truehd": bool(StreamProbe.PATTERNS["truehd"].search(filename)),
@@ -103,21 +120,28 @@ class StreamProbe:
                 return {"error": "timeout"}
 
             if process.returncode != 0:
-                LOGGER.warning(f"Probe failed: {stderr.decode()}")
-                return {"error": "ffprobe_failed"}
+                err_msg = stderr.decode()
+                # Quietly log generic errors, but warn on specific ones if needed
+                # LOGGER.warning(f"Probe failed: {err_msg}") 
+                return {"error": "ffprobe_failed", "details": err_msg}
 
             data = json.loads(stdout.decode())
-            return StreamProbe._normalize_probe_data(data)
+            return StreamProbe._normalize_probe_data(data, file_url)
 
         except Exception as e:
-            LOGGER.error(f"Probe Exception: {e}")
+            LOGGER.error(f"Probe Exception for {file_url[:50]}: {e}")
             return {"error": str(e)}
 
     @staticmethod
-    def _normalize_probe_data(raw_data: dict) -> Dict[str, Any]:
+    def _normalize_probe_data(raw_data: dict, source_id: str = "unknown") -> Dict[str, Any]:
         """Converts raw FFprobe JSON into our internal Standardized Metadata format."""
         streams = raw_data.get("streams", [])
         fmt = raw_data.get("format", {})
+        
+        # Validation: Check if we actually got video streams
+        has_video = any(s.get("codec_type") == "video" for s in streams)
+        if not has_video:
+             LOGGER.error(f"PROBE ERROR: No video stream found for {source_id[-20:]}. Raw: {str(raw_data)[:200]}")
         
         normalized = {
             "duration": float(fmt.get("duration", 0)),
@@ -174,10 +198,6 @@ class StreamProbe:
     # -------------------------------------------------------------------------
     # 3. Parallel Execution Logic
     # -------------------------------------------------------------------------
-
-    # -------------------------------------------------------------------------
-    # 3. Parallel Execution Logic
-    # -------------------------------------------------------------------------
     @staticmethod
     async def parallel_probe(files: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
@@ -209,6 +229,7 @@ class StreamProbe:
                     # A. Telegram Partial Download (Preferred)
                     if "tg_file_ref" in file_info:
                         ref = file_info["tg_file_ref"]
+                        # Passing the original client for ref, but probe_telegram_file handles retry internally if needed
                         probe_data = await StreamProbe.probe_telegram_file(
                             ref["client"], ref["chat_id"], ref["msg_id"]
                         )
@@ -240,16 +261,13 @@ class StreamProbe:
         return results
 
     # -------------------------------------------------------------------------
-    # 4. Telegram Partial Download
-    # -------------------------------------------------------------------------
-    # -------------------------------------------------------------------------
     # 4. Telegram Partial Download (ByteStreamer Pipeline)
     # -------------------------------------------------------------------------
     @staticmethod
-    async def probe_telegram_file(client, chat_id: int, msg_id: int) -> Dict[str, Any]:
+    async def probe_telegram_file(initial_client, chat_id: int, msg_id: int) -> Dict[str, Any]:
         """
         Downloads the first 5MB of a Telegram file to a temp file using ByteStreamer.
-        Reduced from 20MB to 5MB since ffprobe only needs headers/first few frames.
+        Includes RETRY LOGIC: If a client/bot fails, it tries the next available bot.
         """
         import os
         import time
@@ -258,116 +276,118 @@ class StreamProbe:
         from Backend.pyrofork.bot import multi_clients
         from Backend.config import Telegram
         
+        # Gather all available clients
+        # 1. Start with the client that was passed in (to respect the initial context)
+        # 2. Add rest of the clients as fallback
+        
+        available_clients = [initial_client]
+        for idx, client in multi_clients.items():
+            if client != initial_client:
+                available_clients.append(client)
+
         temp_file = f"/tmp/probe_{chat_id}_{msg_id}_{int(time.time())}.mkv"
-        stream_id = f"probe_{secrets.token_hex(6)}"
+        stream_id_base = f"probe_{secrets.token_hex(6)}"
         
-        async def download_range(streamer, file_id, client_index, offset, part_count, sid):
-            """Download a specific range of the file."""
-            chunk_size = 1024 * 1024  # 1MB
-            data = bytearray()
-            
-            body_gen = streamer.prefetch_stream(
-                file_id=file_id,
-                client_index=client_index,
-                offset=offset,
-                first_part_cut=0,
-                last_part_cut=chunk_size,
-                part_count=part_count,
-                chunk_size=chunk_size,
-                prefetch=1,
-                stream_id=sid,
-                meta={"type": "probe"},
-                parallelism=1,
-                additional_client_indices=[]
-            )
-            
+        last_error = None
+
+        for attempt, client in enumerate(available_clients):
             try:
-                async with asyncio.timeout(20):
-                    async for chunk in body_gen:
-                        if chunk:
-                            data.extend(chunk)
-            except asyncio.TimeoutError:
-                pass  # Return what we have
-            
-            return bytes(data)
-        
-        try:
-            # 1. Initialize ByteStreamer
-            streamer = ByteStreamer(client)
-            
-            # 2. Get File Properties (with timeout)
-            try:
-                file_id = await asyncio.wait_for(
-                    streamer.get_file_properties(chat_id, msg_id),
-                    timeout=10.0
-                )
-            except asyncio.TimeoutError:
-                return {"error": "timeout_getting_file_properties"}
-            
-            # 3. Determine Client Index
-            client_index = next((k for k, v in multi_clients.items() if v == client), 0)
-            
-            chunk_size = 1024 * 1024  # 1MB
-            file_size = file_id.file_size
-            
-            # 4. Smart Download Strategy:
-            # Step 1: Try first 2MB only (works for MKV and fast-start MP4)
-            # Step 2: If no streams, add last 2MB (for slow-start MP4 with moov at end)
-            
-            # For small files (< 4MB), just download the whole thing
-            if file_size < 4 * chunk_size:
-                part_count = max(1, (file_size // chunk_size) + 1)
-                first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
+                # LOGGER.info(f"Probing with Client #{attempt+1}...")
                 
-                if len(first_data) == 0:
-                    return {"error": "download_failed_empty"}
+                # --- Worker Function (Same as before, just inside loop) ---
+                async def download_range(streamer, file_id, client_index, offset, part_count, sid):
+                    """Download a specific range of the file."""
+                    chunk_size = 1024 * 1024  # 1MB
+                    data = bytearray()
+                    
+                    body_gen = streamer.prefetch_stream(
+                        file_id=file_id,
+                        client_index=client_index,
+                        offset=offset,
+                        first_part_cut=0,
+                        last_part_cut=chunk_size,
+                        part_count=part_count,
+                        chunk_size=chunk_size,
+                        prefetch=1,
+                        stream_id=sid,
+                        meta={"type": "probe"},
+                        parallelism=1,
+                        additional_client_indices=[]
+                    )
+                    
+                    try:
+                        async with asyncio.timeout(20):
+                            async for chunk in body_gen:
+                                if chunk:
+                                    data.extend(chunk)
+                    except asyncio.TimeoutError:
+                        LOGGER.warning(f"Probe Stream Timeout using client {client_index}")
+                        raise Exception("Timeout")
+                    
+                    return bytes(data)
+
+                # 1. Initialize ByteStreamer
+                streamer = ByteStreamer(client)
+                
+                # 2. Get File Properties
+                try:
+                    file_id = await asyncio.wait_for(
+                        streamer.get_file_properties(chat_id, msg_id),
+                        timeout=10.0
+                    )
+                except Exception as e:
+                    # LOGGER.warning(f"Client {attempt} failed to get props: {e}")
+                    raise e
+                
+                # 3. Determine Client Index
+                client_index = next((k for k, v in multi_clients.items() if v == client), 0)
+                
+                chunk_size = 1024 * 1024
+                file_size = file_id.file_size
+                stream_id = f"{stream_id_base}_{attempt}"
+
+                # 4. Smart Download Strategy
+                if file_size < 4 * chunk_size:
+                    part_count = max(1, (file_size // chunk_size) + 1)
+                    first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
+                    
+                    if not first_data: raise Exception("Empty Data")
+
+                    with open(temp_file, "wb") as f:
+                        f.write(first_data)
+                    return await StreamProbe.probe_file(temp_file)
+                
+                # Step 1: Download first 2MB
+                first_data = await download_range(streamer, file_id, client_index, 0, 2, f"{stream_id}_start")
+                if not first_data: raise Exception("Empty Data")
                 
                 with open(temp_file, "wb") as f:
                     f.write(first_data)
-                
-                return await StreamProbe.probe_file(temp_file)
-            
-            # Step 1: Download first 2MB only
-            first_data = await download_range(streamer, file_id, client_index, 0, 2, f"{stream_id}_start")
-            
-            if len(first_data) == 0:
-                return {"error": "download_failed_empty"}
-            
-            # Try probe with first chunk only
-            with open(temp_file, "wb") as f:
-                f.write(first_data)
-            
-            result = await StreamProbe.probe_file(temp_file)
-            
-            # Check if we got meaningful data
-            has_video = bool(result.get("video"))
-            has_audio = len(result.get("audio", [])) > 0
-            
-            if has_video or has_audio:
-                LOGGER.debug(f"Probe {stream_id}: Success with first chunk only ({len(first_data)} bytes)")
-                return result
-            
-            # Step 2: First chunk didn't work, download last 2MB for MP4 moov atom
-            LOGGER.debug(f"Probe {stream_id}: First chunk failed, trying with last chunk for MP4 moov")
-            
-            last_offset = max(0, (file_size // chunk_size) - 2)
-            last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
-            
-            if last_data:
-                # Write first + last combined
-                with open(temp_file, "wb") as f:
-                    f.write(first_data)
-                    f.write(last_data)
                 
                 result = await StreamProbe.probe_file(temp_file)
-                LOGGER.debug(f"Probe {stream_id}: Tried with first+last ({len(first_data) + len(last_data)} bytes)")
-            
-            return result
-            
-        except Exception as e:
-            LOGGER.debug(f"TG Probe Error ({stream_id}): {e}")
-            return {"error": str(e)}
-        finally:
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+                if result.get("video") or result.get("audio"):
+                    return result
+                    
+                # Step 2: Last chunk (for MP4)
+                last_offset = max(0, (file_size // chunk_size) - 2)
+                last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
+                
+                if last_data:
+                    with open(temp_file, "wb") as f:
+                        f.write(first_data)
+                        f.write(last_data)
+                    return await StreamProbe.probe_file(temp_file)
+                
+                return result # Return whatever we got
+
+            except Exception as e:
+                # LOGGER.warning(f"Probe attempt {attempt+1} failed: {e}")
+                last_error = e
+                # Clean up and continue to next bot
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                continue
+
+        # If loop finishes without return
+        return {"error": f"All bots failed. Last error: {last_error}"}
 
