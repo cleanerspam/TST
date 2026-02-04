@@ -113,133 +113,44 @@
             ;
         }
 
-        /* Glassmorphism Navigation */
-        .glass-nav {
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            transition: all 0.3s ease;
-        }
-
-        /* Gradient Text Logo */
-        .gradient-text {
-            background: linear-gradient(135deg, {
-                    {
-                    theme.colors.primary
-                }
-            }
-
-            , {
-                {
-                theme.colors.accent or theme.colors.secondary or '#a855f7'
-            }
-        });
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        display: inline-block;
-        }
-
-        /* Nav Link refinements */
-        .nav-link {
-            position: relative;
-            transition: all 0.2s ease;
-            opacity: 0.8;
-        }
-
-        .nav-link:hover {
-            opacity: 1;
-            transform: translateY(-1px);
-        }
-
-        .nav-link.active {
-            opacity: 1;
-
-            color: {
-                    {
-                    theme.colors.primary
-                }
-            }
-
-            !important;
-        }
-
-        .nav-link::after {
-            content: '';
-            position: absolute;
-            bottom: -4px;
-            left: 50%;
-            width: 0;
-            height: 2px;
-
-            background: {
-                    {
-                    theme.colors.primary
-                }
-            }
-
-            ;
-            transition: all 0.3s ease;
-            transform: translateX(-50%);
-        }
-
-        .nav-link.active::after {
-            width: 100%;
-        }
-
-        /* Mobile Menu */
+        /* Mobile menu animation */
         #mobile-menu {
-            transition: max-height 0.3s ease-out, opacity 0.2s ease;
             max-height: 0;
             overflow: hidden;
-            opacity: 0;
+            transition: max-height 0.3s ease-out;
         }
 
         #mobile-menu.active {
             max-height: 500px;
-            opacity: 1;
         }
     </style>
 </head>
 
 <body class="min-h-screen flex flex-col">
     <!-- Navigation -->
-    <nav class="glass-nav shadow-lg">
+    <nav class="theme-card shadow-lg">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between items-center h-20">
-                <!-- Branding -->
-                <div class="flex items-center space-x-12">
-                    <a href="/" class="flex items-center space-x-3 group">
-                        <div
-                            class="w-10 h-10 theme-primary rounded-xl flex items-center justify-center shadow-xl transform group-hover:rotate-6 transition-transform">
-                            <i class="fas fa-satellite-dish text-white text-xl"></i>
-                        </div>
-                        <h1 class="text-2xl font-black gradient-text tracking-tighter">Telegram Stremio</h1>
-                    </a>
-
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-4">
+                    <h1 class="text-2xl font-bold text-primary">Telegram Stremio</h1>
                     {% if current_user %}
-                    <div class="hidden lg:flex items-center space-x-8">
-                        <a href="/" class="nav-link text-sm font-bold theme-text uppercase tracking-wider">Dashboard</a>
+                    <div class="hidden md:flex space-x-4">
+                        <a href="/"
+                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Dashboard</a>
                         <a href="/media/manage"
-                            class="nav-link text-sm font-bold theme-text uppercase tracking-wider">Media</a>
+                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Media</a>
                         <a href="/media/updates"
-                            class="nav-link text-sm font-bold theme-text uppercase tracking-wider">Updates</a>
+                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Manual
+                            Updates</a>
                     </div>
                     {% endif %}
                 </div>
-
-                <!-- Tools -->
-                <div class="hidden lg:flex items-center space-x-6">
-                    <!-- Theme -->
-                    <div class="relative flex items-center bg-white/5 border border-white/10 rounded-xl px-2">
-                        <i class="fas fa-palette text-primary px-2 opacity-70"></i>
+                <div class="flex items-center space-x-4">
+                    <!-- Theme Selector (hidden on smallest screens) -->
+                    <div class="relative hidden sm:block">
                         <form method="post" action="/set-theme" id="theme-form">
-                            <select name="theme" onchange="this.form.submit()"
-                                class="bg-transparent border-none py-2 pr-8 pl-1 text-[11px] font-black uppercase theme-text focus:ring-0 cursor-pointer">
+                            <select name="theme" onchange="document.getElementById('theme-form').submit()"
+                                class="theme-card border border-gray-300 rounded-md px-3 py-2 text-sm">
                                 {% for theme_key, theme_data in themes.items() %}
                                 <option value="{{ theme_key }}" {% if current_theme==theme_key %}selected{% endif %}>
                                     {{ theme_data.name }}
@@ -248,56 +159,45 @@
                             </select>
                         </form>
                     </div>
-
                     {% if current_user %}
-                    <div class="flex items-center space-x-4 pl-6 border-l border-white/10">
-                        <div class="flex flex-col items-end">
-                            <span
-                                class="text-[9px] uppercase font-black text-primary tracking-[0.2em] leading-none mb-1">Authenticated</span>
-                            <span class="text-xs font-bold theme-text">{{ current_user }}</span>
-                        </div>
+                    <div class="hidden md:flex items-center space-x-4">
+                        <span class="text-sm theme-text-secondary">{{ current_user }}</span>
                         <a href="/logout"
-                            class="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-xl text-[11px] font-black uppercase transition-all shadow-lg active:scale-95">
-                            Logout
-                        </a>
+                            class="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors">Logout</a>
                     </div>
-                    {% else %}
-                    <a href="/login"
-                        class="theme-primary text-white px-6 py-2.5 rounded-xl font-black uppercase text-xs shadow-lg hover:brightness-110 active:scale-95">
-                        Login
-                    </a>
-                    {% endif %}
-                </div>
-
-                <!-- Mobile Toggle -->
-                <div class="lg:hidden flex items-center space-x-4">
+                    <!-- Mobile hamburger button -->
                     <button onclick="toggleMobileMenu()"
-                        class="p-2.5 rounded-xl theme-card border border-white/10 text-primary shadow-sm">
+                        class="md:hidden p-2 rounded-md theme-card border border-gray-300">
                         <i class="fas fa-bars text-xl" id="menu-icon"></i>
                     </button>
+                    {% else %}
+                    <a href="/login"
+                        class="theme-primary text-white px-4 py-2 rounded-md hover:opacity-90 transition-opacity">Login</a>
+                    {% endif %}
                 </div>
             </div>
-        </div>
 
-        <!-- Mobile Menu -->
-        <div id="mobile-menu" class="lg:hidden bg-black/50 backdrop-blur-xl border-t border-white/10">
-            <div class="px-6 py-8 space-y-4">
-                {% if current_user %}
-                <a href="/"
-                    class="block px-5 py-4 rounded-xl bg-white/5 theme-text font-bold uppercase text-xs tracking-widest">Dashboard</a>
-                <a href="/media/manage"
-                    class="block px-5 py-4 rounded-xl bg-white/5 theme-text font-bold uppercase text-xs tracking-widest">Media</a>
-                <a href="/media/updates"
-                    class="block px-5 py-4 rounded-xl bg-white/5 theme-text font-bold uppercase text-xs tracking-widest">Updates</a>
-                <div class="pt-6 flex flex-col space-y-4">
-                    <a href="/logout"
-                        class="block text-center bg-red-600 text-white py-4 rounded-xl font-black uppercase text-xs">Logout</a>
+            <!-- Mobile menu -->
+            {% if current_user %}
+            <div id="mobile-menu" class="md:hidden border-t border-gray-200">
+                <div class="px-4 py-4 space-y-3">
+                    <a href="/"
+                        class="block px-3 py-2 rounded-md text-text hover:bg-gray-100 transition-colors">Dashboard</a>
+                    <a href="/media/manage"
+                        class="block px-3 py-2 rounded-md text-text hover:bg-gray-100 transition-colors">Media</a>
+                    <a href="/media/updates"
+                        class="block px-3 py-2 rounded-md text-text hover:bg-gray-100 transition-colors">Manual
+                        Updates</a>
+                    <div class="pt-3 border-t border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <span class="text-sm theme-text-secondary">{{ current_user }}</span>
+                            <a href="/logout"
+                                class="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors text-sm">Logout</a>
+                        </div>
+                    </div>
                 </div>
-                {% else %}
-                <a href="/login"
-                    class="block text-center theme-primary text-white py-4 rounded-xl font-black uppercase text-xs">Login</a>
-                {% endif %}
             </div>
+            {% endif %}
         </div>
     </nav>
 
@@ -305,18 +205,15 @@
         function toggleMobileMenu() {
             const menu = document.getElementById('mobile-menu');
             const icon = document.getElementById('menu-icon');
-            const isOpen = menu.classList.toggle('active');
-            icon.className = isOpen ? 'fas fa-times text-xl' : 'fas fa-bars text-xl';
-        }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            const path = window.location.pathname;
-            document.querySelectorAll('.nav-link').forEach(link => {
-                if (link.getAttribute('href') === path) {
-                    link.classList.add('active');
-                }
-            });
-        });
+            if (menu.classList.contains('active')) {
+                menu.classList.remove('active');
+                icon.className = 'fas fa-bars text-xl';
+            } else {
+                menu.classList.add('active');
+                icon.className = 'fas fa-times text-xl';
+            }
+        }
     </script>
 
     <!-- Main Content -->
