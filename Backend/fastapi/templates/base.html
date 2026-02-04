@@ -44,41 +44,190 @@
             }
         }
     </script>
-        <style>
-        body { background-color: {{ theme.colors.background }}; color: {{ theme.colors.text }}; }
-        .theme-card { background-color: {{ theme.colors.card }}; }
-        .theme-primary { background-color: {{ theme.colors.primary }}; }
-        .theme-secondary { background-color: {{ theme.colors.secondary }}; }
-        .theme-accent { background-color: {{ theme.colors.accent }}; }
-        .theme-text-secondary { color: {{ theme.colors.text_secondary }}; }
+    <style>
+        body {
+            background-color: {
+                    {
+                    theme.colors.background
+                }
+            }
+
+            ;
+
+            color: {
+                    {
+                    theme.colors.text
+                }
+            }
+
+            ;
+        }
+
+        .theme-card {
+            background-color: {
+                    {
+                    theme.colors.card
+                }
+            }
+
+            ;
+        }
+
+        .theme-primary {
+            background-color: {
+                    {
+                    theme.colors.primary
+                }
+            }
+
+            ;
+        }
+
+        .theme-secondary {
+            background-color: {
+                    {
+                    theme.colors.secondary
+                }
+            }
+
+            ;
+        }
+
+        .theme-accent {
+            background-color: {
+                    {
+                    theme.colors.accent
+                }
+            }
+
+            ;
+        }
+
+        .theme-text-secondary {
+            color: {
+                    {
+                    theme.colors.text_secondary
+                }
+            }
+
+            ;
+        }
+
+        /* Glassmorphism Navigation */
+        .glass-nav {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+
+        /* Gradient Text Logo */
+        .gradient-text {
+            background: linear-gradient(135deg, {
+                    {
+                    theme.colors.primary
+                }
+            }
+
+            , {
+                {
+                theme.colors.accent or theme.colors.secondary
+            }
+        });
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        }
+
+        /* Active Nav Link Marker */
+        .nav-link {
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 50%;
+            width: 0;
+            height: 2px;
+
+            background: {
+                    {
+                    theme.colors.primary
+                }
+            }
+
+            ;
+            transition: all 0.3s ease;
+            transform: translateX(-50%);
+        }
+
+        .nav-link:hover::after,
+        .nav-link.active::after {
+            width: 80%;
+        }
+
+        .nav-link:active {
+            transform: scale(0.95);
+        }
+
+        /* Mobile Menu Animation */
+        #mobile-menu {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            transform-origin: top;
+        }
+
+        #mobile-menu.hidden {
+            display: none;
+            opacity: 0;
+            transform: scaleY(0);
+        }
     </style>
 </head>
 
 <body class="min-h-screen flex flex-col">
     <!-- Navigation -->
-    <nav class="theme-card shadow-lg">
+    <nav class="glass-nav shadow-md">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="flex justify-between items-center h-16">
-                <div class="flex items-center space-x-4">
-                    <h1 class="text-2xl font-bold text-primary">Telegram Stremio</h1>
+            <div class="flex justify-between items-center h-20">
+                <!-- Branding & Desktop Nav -->
+                <div class="flex items-center space-x-10">
+                    <a href="/" class="flex items-center space-x-3 group">
+                        <div
+                            class="w-10 h-10 theme-primary rounded-xl flex items-center justify-center shadow-lg transform group-hover:rotate-12 transition-transform duration-300">
+                            <i class="fas fa-satellite-dish text-white text-xl"></i>
+                        </div>
+                        <h1 class="text-2xl font-black gradient-text tracking-tight">Telegram Stremio</h1>
+                    </a>
+
                     {% if current_user %}
-                    <div class="hidden md:flex space-x-4">
+                    <div class="hidden lg:flex items-center space-x-6">
                         <a href="/"
-                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Dashboard</a>
+                            class="nav-link text-sm font-bold theme-text-secondary hover:text-primary px-3 py-2 rounded-lg transition-all">Dashboard</a>
                         <a href="/media/manage"
-                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Media</a>
+                            class="nav-link text-sm font-bold theme-text-secondary hover:text-primary px-3 py-2 rounded-lg transition-all">Media</a>
                         <a href="/media/updates"
-                            class="text-text hover:text-primary px-3 py-2 rounded-md transition-colors">Manual
+                            class="nav-link text-sm font-bold theme-text-secondary hover:text-primary px-3 py-2 rounded-lg transition-all">Manual
                             Updates</a>
                     </div>
                     {% endif %}
                 </div>
-                <div class="flex items-center space-x-4">
-                    <!-- Theme Selector -->
-                    <div class="relative">
-                        <form method="post" action="/set-theme" id="theme-form">
+
+                <!-- Right Side Tools (Desktop) -->
+                <div class="hidden lg:flex items-center space-x-6">
+                    <!-- Theme Selector UI Refined -->
+                    <div class="relative group">
+                        <form method="post" action="/set-theme" id="theme-form" class="relative">
+                            <div class="absolute left-3 top-1/2 -translate-y-1/2 text-primary opacity-60">
+                                <i class="fas fa-palette text-xs"></i>
+                            </div>
                             <select name="theme" onchange="document.getElementById('theme-form').submit()"
-                                class="theme-card border border-gray-300 rounded-md px-3 py-2 text-sm">
+                                class="bg-white/5 border border-white/10 rounded-xl pl-9 pr-4 py-2 text-xs font-bold theme-text focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all cursor-pointer hover:bg-white/10">
                                 {% for theme_key, theme_data in themes.items() %}
                                 <option value="{{ theme_key }}" {% if current_theme==theme_key %}selected{% endif %}>
                                     {{ theme_data.name }}
@@ -87,20 +236,90 @@
                             </select>
                         </form>
                     </div>
+
                     {% if current_user %}
-                    <div class="flex items-center space-x-4">
-                        <span class="text-sm theme-text-secondary">{{ current_user }}</span>
+                    <div class="flex items-center space-x-4 pl-4 border-l border-white/10">
+                        <div class="flex flex-col items-end">
+                            <span
+                                class="text-[10px] uppercase font-black text-primary tracking-widest leading-none">Admin</span>
+                            <span class="text-sm font-bold theme-text truncate max-w-[120px]">{{ current_user }}</span>
+                        </div>
                         <a href="/logout"
-                            class="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition-colors">Logout</a>
+                            class="bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white border border-red-500/20 px-5 py-2.5 rounded-xl text-xs font-black uppercase transition-all shadow-sm active:scale-95">
+                            Logout
+                        </a>
                     </div>
                     {% else %}
                     <a href="/login"
-                        class="theme-primary text-white px-4 py-2 rounded-md hover:opacity-90 transition-opacity">Login</a>
+                        class="theme-primary text-white px-6 py-2.5 rounded-xl font-black uppercase text-xs shadow-lg hover:opacity-90 transition-all active:scale-95">
+                        Login
+                    </a>
                     {% endif %}
+                </div>
+
+                <!-- Mobile Header Tools -->
+                <div class="lg:hidden flex items-center space-x-4">
+                    {% if current_user %}
+                    <span class="text-xs font-bold theme-text-secondary">{{ current_user }}</span>
+                    {% endif %}
+                    <button onclick="toggleMobileMenu()"
+                        class="p-2 rounded-lg theme-card border border-white/10 text-primary">
+                        <i class="fas fa-bars text-xl" id="menu-icon"></i>
+                    </button>
                 </div>
             </div>
         </div>
+
+        <!-- Mobile Menu (Overlay) -->
+        <div id="mobile-menu"
+            class="hidden lg:hidden border-t border-white/10 bg-black/40 backdrop-blur-xl px-4 py-6 space-y-4">
+            {% if current_user %}
+            <a href="/" class="block px-4 py-3 rounded-xl bg-white/5 theme-text font-bold">Dashboard</a>
+            <a href="/media/manage" class="block px-4 py-3 rounded-xl bg-white/5 theme-text font-bold">Media</a>
+            <a href="/media/updates" class="block px-4 py-3 rounded-xl bg-white/5 theme-text font-bold">Manual
+                Updates</a>
+            <div class="pt-4 mt-4 border-t border-white/10 flex justify-between items-center">
+                <form method="post" action="/set-theme" id="theme-form-mobile">
+                    <select name="theme" onchange="this.form.submit()"
+                        class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs theme-text">
+                        {% for theme_key, theme_data in themes.items() %}
+                        <option value="{{ theme_key }}" {% if current_theme==theme_key %}selected{% endif %}>{{
+                            theme_data.name }}</option>
+                        {% endfor %}
+                    </select>
+                </form>
+                <a href="/logout" class="bg-red-500 text-white px-6 py-2 rounded-xl text-xs font-bold">Logout</a>
+            </div>
+            {% else %}
+            <a href="/login" class="block text-center theme-primary text-white py-3 rounded-xl font-bold">Login</a>
+            {% endif %}
+        </div>
     </nav>
+
+    <script>
+        function toggleMobileMenu() {
+            const menu = document.getElementById('mobile-menu');
+            const icon = document.getElementById('menu-icon');
+            menu.classList.toggle('hidden');
+
+            if (menu.classList.contains('hidden')) {
+                icon.className = 'fas fa-bars text-xl';
+            } else {
+                icon.className = 'fas fa-times text-xl';
+            }
+        }
+
+        // Highlight Active Link
+        document.addEventListener('DOMContentLoaded', () => {
+            const path = window.location.pathname;
+            document.querySelectorAll('.nav-link').forEach(link => {
+                if (link.getAttribute('href') === path) {
+                    link.classList.add('active', 'text-primary');
+                    link.classList.remove('theme-text-secondary');
+                }
+            });
+        });
+    </script>
 
     <!-- Main Content -->
     <main class="flex-1">

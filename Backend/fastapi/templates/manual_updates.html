@@ -71,13 +71,13 @@
                 <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400"></i>
             </div>
             <button onclick="clearSearch()"
-                class="theme-card hover:bg-opacity-80 px-4 py-2 rounded transition-colors flex items-center space-x-2">
+                class="flex items-center space-x-2 px-4 py-2 rounded-lg theme-card hover:bg-opacity-80 transition-all shadow-md active:scale-95 focus:outline-none border border-white/10">
                 <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
             </button>
 
             <!-- Auto-Resolve Toggle -->
             <div id="auto-resolve-container"
-                class="flex items-center space-x-3 theme-card px-4 py-2 rounded border border-gray-700/50 transition-all duration-300">
+                class="flex items-center space-x-3 theme-card px-4 py-2 rounded-lg border border-gray-700/50 transition-all duration-300 shadow-md active:scale-[0.98]">
                 <div class="flex flex-col items-start translate-y-0.5">
                     <span class="text-[10px] font-bold text-indigo-400 uppercase tracking-widest hidden"
                         id="auto-resolve-status">
@@ -87,7 +87,7 @@
                 </div>
                 <button id="auto-resolve-toggle" onclick="toggleAutoResolveMode()" role="switch" aria-checked="false"
                     class="bg-gray-700 relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2">
-                    <span aria-hidden="true"
+                    <span id="toggle-knob" aria-hidden="true"
                         class="translate-x-0 pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"></span>
                 </button>
             </div>
