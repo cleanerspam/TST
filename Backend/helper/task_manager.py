@@ -89,7 +89,7 @@ async def delete_message(chat_id: int, msg_id: int):
 
     # All retries exhausted - add to junk database
     LOGGER.error(f"Failed to delete message {msg_id} in {chat_id} after {max_retries} attempts.")
-    
+
     # Add all failed deletions to require_user_delete
     if 'last_error' in locals():
         error_msg = str(last_error)
