@@ -195,8 +195,8 @@ class QualityArbiter:
                 score += 100
                 breakdown.append("Semantic Eng Subs (+100)")
             else:
-                score -= 200
-                breakdown.append("No Subtitles Penalty (-200)")
+                score -= 350
+                breakdown.append("No Subtitles Penalty (-350)")
         else:
             # Probe Analysis
             sub_langs = [s.get("lang", "und") for s in subs]
@@ -215,8 +215,8 @@ class QualityArbiter:
                 score += 100
                 breakdown.append("English Subs (+100)")
             else:
-                score -= 100
-                breakdown.append("Unknown/Bad Subs (-100)")
+                score -= 350
+                breakdown.append("No English Subtitles Penalty (-350)")
 
         # ---------------------------------------------------------------------
         # 6. Novelty
