@@ -4,13 +4,10 @@
 
 {% block content %}
 <div class="min-h-screen">
-    <!-- Header with just status pill -->
+    <!-- Refresh button only -->
     <header class="theme-card shadow-lg mb-8">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-4">
-                    <h1 class="text-3xl font-bold text-primary">Dashboard</h1>
-                </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-end">
                 <button onclick="refreshSystemStats()"
                     class="flex items-center space-x-2 px-4 py-2 rounded-lg theme-primary text-white hover:opacity-90 transition-all shadow-md active:scale-95 group focus:outline-none"
                     title="Refresh System Stats">
