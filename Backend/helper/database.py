@@ -2946,6 +2946,9 @@ class Database:
                 files_to_probe.append(probe_payload_old)
 
         # 4. Parallel Probe
+        new_count = sum(1 for f in files_to_probe if f["id"].startswith("new_"))
+        old_count = sum(1 for f in files_to_probe if f["id"].startswith("old_"))
+        LOGGER.info(f"🔍 Probing {len(files_to_probe)} files: {new_count} candidates + {old_count} current files")
         probe_results = await StreamProbe.parallel_probe(files_to_probe)
         
         # 5. Arbitration per GROUP

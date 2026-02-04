@@ -270,6 +270,7 @@ class QualityArbiter:
             "breakdown": breakdown,
             "has_perfect_combo": has_perfect_combo,
             "height": p_height,
+            "file_type": f_type,  # Add for tie-breaker logic
             "can_auto_resolve": score > 0
         }
 
@@ -335,6 +336,24 @@ class QualityArbiter:
         size_diff_ratio = abs(new_size - old_size) / (old_size or 1)
         
         if size_diff_ratio < 0.01: # < 1% diff
+             # When size is virtually identical, check file types
+             old_type = old_score.get("file_type", "video")
+             new_type = new_score.get("file_type", "video")
+             
+             # Case 1: Same score, same type -> Prefer older file (stability)
+             if s_new == s_old:
+                 if old_type == new_type:
+                     LOGGER.info(f"DECISION: Keep Old (Equal Score, Same Type '{old_type}', Prefer Stability)")
+                     return "keep_old"
+                 # Case 2: Same score, different types -> Prefer video over document
+                 elif new_type == "video" and old_type != "video":
+                     LOGGER.info("DECISION: Keep New (Equal Score, New is Video)")
+                     return "keep_new"
+                 elif old_type == "video" and new_type != "video":
+                     LOGGER.info("DECISION: Keep Old (Equal Score, Old is Video)")
+                     return "keep_old"
+             
+             # Case 3: New score is higher
              if s_new >= s_old:
                  LOGGER.info("DECISION: Keep New (Identical Size, Score >= Old)")
                  return "keep_new"
