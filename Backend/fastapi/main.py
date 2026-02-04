@@ -122,8 +122,8 @@ async def media_management(request: Request, media_type: str = "movie", _: bool 
 async def edit_media(request: Request, tmdb_id: int, db_index: int, media_type: str, _: bool = Depends(require_auth)):
     return await edit_media_page(request, tmdb_id, db_index, media_type, _)
 
-@app.get("/media/updates", response_class=HTMLResponse)
-async def manual_updates(request: Request, _: bool = Depends(require_auth)):
+@app.get("/pendingupdates", response_class=HTMLResponse)
+async def pending_updates(request: Request, _: bool = Depends(require_auth)):
     return await manual_updates_page(request, _)
 
 @app.get("/api/media/list")

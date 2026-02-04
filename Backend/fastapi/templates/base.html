@@ -100,11 +100,11 @@
                         <a href="/" class="nav-link px-4 py-2 transition-all duration-300 {% if request.path == '/' %}bg-gray-200 theme-card font-semibold{% endif %}">
                             <i class="fas fa-home mr-2"></i> Dashboard
                         </a>
-                        <a href="/media/manage" class="nav-link px-4 py-2 transition-all duration-300 {% if request.path.startswith('/media') %}bg-gray-200 theme-card font-semibold{% endif %}">
+                        <a href="/media/manage" class="nav-link px-4 py-2 transition-all duration-300 {% if request.path.startswith('/media/manage') or request.path.startswith('/media/edit') %}bg-gray-200 theme-card font-semibold{% endif %}">
                             <i class="fas fa-film mr-2"></i> Media
                         </a>
-                        <a href="/media/updates" class="nav-link px-4 py-2 transition-all duration-300 {% if '/updates' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
-                            <i class="fas fa-sync-alt mr-2"></i> Manual Updates
+                        <a href="/pendingupdates" class="nav-link px-4 py-2 transition-all duration-300 {% if '/pendingupdates' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
+                            <i class="fas fa-sync-alt mr-2"></i> Pending Updates
                         </a>
                         <a href="/status" class="nav-link px-4 py-2 transition-all duration-300 {% if '/status' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
                             <i class="fas fa-chart-line mr-2"></i> Status
@@ -163,11 +163,11 @@
                     <a href="/" class="mobile-nav-link block px-4 py-3 transition-colors {% if request.path == '/' %}bg-gray-200 theme-card font-semibold{% endif %}">
                         <i class="fas fa-home mr-3"></i> Dashboard
                     </a>
-                    <a href="/media/manage" class="mobile-nav-link block px-4 py-3 transition-colors {% if request.path.startswith('/media') %}bg-gray-200 theme-card font-semibold{% endif %}">
+                    <a href="/media/manage" class="mobile-nav-link block px-4 py-3 transition-colors {% if request.path.startswith('/media/manage') or request.path.startswith('/media/edit') %}bg-gray-200 theme-card font-semibold{% endif %}">
                         <i class="fas fa-film mr-3"></i> Media
                     </a>
-                    <a href="/media/updates" class="mobile-nav-link block px-4 py-3 transition-colors {% if '/updates' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
-                        <i class="fas fa-sync-alt mr-3"></i> Manual Updates
+                    <a href="/pendingupdates" class="mobile-nav-link block px-4 py-3 transition-colors {% if '/pendingupdates' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
+                        <i class="fas fa-sync-alt mr-3"></i> Pending Updates
                     </a>
                     <a href="/status" class="mobile-nav-link block px-4 py-3 transition-colors {% if '/status' in request.path %}bg-gray-200 theme-card font-semibold{% endif %}">
                         <i class="fas fa-chart-line mr-3"></i> Status

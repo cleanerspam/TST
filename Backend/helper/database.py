@@ -470,14 +470,16 @@ class Database:
                 error_msg = str(e).lower()
                 LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                 # Store for later deletion by external bot
-                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                    "chat_id": chat_id,
-                    "msg_id": msg_id,
-                    "created_at": datetime.utcnow(),
-                    "reason": f"File replacement deletion failure for {log_name}: {str(e)}"
-                })
-                if result.inserted_id:
+                try:
+                    result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                        "chat_id": chat_id,
+                        "msg_id": msg_id,
+                        "created_at": datetime.utcnow(),
+                        "reason": f"File replacement deletion failure for {log_name}: {str(e)}"
+                    })
                     LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                except Exception as db_error:
+                    LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
         except Exception as e:
             LOGGER.error(f"Failed to decode file ID for deletion for {log_name}: {e}")
 
@@ -1166,14 +1168,16 @@ class Database:
                                 error_msg = str(e).lower()
                                 LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                 # Store for later deletion by external bot
-                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                    "chat_id": chat_id,
-                                    "msg_id": msg_id,
-                                    "created_at": datetime.utcnow(),
-                                    "reason": f"Movie deletion failure: {str(e)}"
-                                })
-                                if result.inserted_id:
+                                try:
+                                    result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                        "chat_id": chat_id,
+                                        "msg_id": msg_id,
+                                        "created_at": datetime.utcnow(),
+                                        "reason": f"Movie deletion failure: {str(e)}"
+                                    })
                                     LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                except Exception as db_error:
+                                    LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                     except Exception as e:
                         LOGGER.error(f"Failed to queue file for deletion: {e}")
 
@@ -1199,14 +1203,16 @@ class Database:
                                         error_msg = str(e).lower()
                                         LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                         # Store for later deletion by external bot
-                                        result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                            "chat_id": chat_id,
-                                            "msg_id": msg_id,
-                                            "created_at": datetime.utcnow(),
-                                            "reason": f"TV episode deletion failure: {str(e)}"
-                                        })
-                                        if result.inserted_id:
+                                        try:
+                                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                "chat_id": chat_id,
+                                                "msg_id": msg_id,
+                                                "created_at": datetime.utcnow(),
+                                                "reason": f"TV episode deletion failure: {str(e)}"
+                                            })
                                             LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                        except Exception as db_error:
+                                            LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                             except Exception as e:
                                 LOGGER.error(f"Failed to queue file for deletion: {e}")
 
@@ -1242,14 +1248,16 @@ class Database:
                             error_msg = str(e).lower()
                             LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                             # Store for later deletion by external bot
-                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                "chat_id": chat_id,
-                                "msg_id": msg_id,
-                                "created_at": datetime.utcnow(),
-                                "reason": f"Movie quality deletion failure: {str(e)}"
-                            })
-                            if result.inserted_id:
+                            try:
+                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                    "chat_id": chat_id,
+                                    "msg_id": msg_id,
+                                    "created_at": datetime.utcnow(),
+                                    "reason": f"Movie quality deletion failure: {str(e)}"
+                                })
                                 LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                            except Exception as db_error:
+                                LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                 except Exception as e:
                     LOGGER.error(f"Failed to queue file for deletion: {e}")
                 break
@@ -1292,14 +1300,16 @@ class Database:
                                         error_msg = str(e).lower()
                                         LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                         # Store for later deletion by external bot
-                                        result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                            "chat_id": chat_id,
-                                            "msg_id": msg_id,
-                                            "created_at": datetime.utcnow(),
-                                            "reason": f"TV episode deletion failure: {str(e)}"
-                                        })
-                                        if result.inserted_id:
+                                        try:
+                                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                "chat_id": chat_id,
+                                                "msg_id": msg_id,
+                                                "created_at": datetime.utcnow(),
+                                                "reason": f"TV episode deletion failure: {str(e)}"
+                                            })
                                             LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                        except Exception as db_error:
+                                            LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                             except Exception as e:
                                 LOGGER.error(f"Failed to queue file for deletion: {e}")
                         break
@@ -1343,14 +1353,16 @@ class Database:
                                     error_msg = str(e).lower()
                                     LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                     # Store for later deletion by external bot
-                                    result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                        "chat_id": chat_id,
-                                        "msg_id": msg_id,
-                                        "created_at": datetime.utcnow(),
-                                        "reason": f"TV season deletion failure: {str(e)}"
-                                    })
-                                    if result.inserted_id:
+                                    try:
+                                        result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                            "chat_id": chat_id,
+                                            "msg_id": msg_id,
+                                            "created_at": datetime.utcnow(),
+                                            "reason": f"TV season deletion failure: {str(e)}"
+                                        })
                                         LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                    except Exception as db_error:
+                                        LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                         except Exception as e:
                             LOGGER.error(f"Failed to decode file ID for deletion: {e}")
 
@@ -1513,14 +1525,16 @@ class Database:
                                             error_msg = str(e).lower()
                                             LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                             # Store for later deletion by external bot
-                                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                                "chat_id": chat_id,
-                                                "msg_id": msg_id,
-                                                "created_at": datetime.utcnow(),
-                                                "reason": f"TV quality deletion failure: {str(e)}"
-                                            })
-                                            if result.inserted_id:
+                                            try:
+                                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                    "chat_id": chat_id,
+                                                    "msg_id": msg_id,
+                                                    "created_at": datetime.utcnow(),
+                                                    "reason": f"TV quality deletion failure: {str(e)}"
+                                                })
                                                 LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                            except Exception as db_error:
+                                                LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                                 except Exception as e:
                                     LOGGER.error(f"Failed to queue file for deletion: {e}")
                                 break
@@ -1892,14 +1906,16 @@ class Database:
                         error_msg = str(e).lower()
                         LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                         # Store for later deletion by external bot
-                        result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                            "chat_id": chat_id,
-                            "msg_id": msg_id,
-                            "created_at": datetime.utcnow(),
-                            "reason": f"Pending update candidate deletion failure: {str(e)}"
-                        })
-                        if result.inserted_id:
+                        try:
+                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                "chat_id": chat_id,
+                                "msg_id": msg_id,
+                                "created_at": datetime.utcnow(),
+                                "reason": f"Pending update candidate deletion failure: {str(e)}"
+                            })
                             LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                        except Exception as db_error:
+                            LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
             except Exception as e:
                 LOGGER.error(f"Failed to parse candidate file info for deletion: {e}")
 
@@ -1948,14 +1964,16 @@ class Database:
                                 error_msg = str(e).lower()
                                 LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                 # Store for later deletion by external bot
-                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                    "chat_id": chat_id,
-                                    "msg_id": msg_id,
-                                    "created_at": datetime.utcnow(),
-                                    "reason": f"Pending update current file deletion failure: {str(e)}"
-                                })
-                                if result.inserted_id:
+                                try:
+                                    result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                        "chat_id": chat_id,
+                                        "msg_id": msg_id,
+                                        "created_at": datetime.utcnow(),
+                                        "reason": f"Pending update current file deletion failure: {str(e)}"
+                                    })
                                     LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                except Exception as db_error:
+                                    LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                     except Exception as e:
                         LOGGER.error(f"Failed to parse current file info for deletion: {e}")
                     
@@ -2002,14 +2020,16 @@ class Database:
                                                 error_msg = str(e).lower()
                                                 LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                                                 # Store for later deletion by external bot
-                                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                                    "chat_id": chat_id,
-                                                    "msg_id": msg_id,
-                                                    "created_at": datetime.utcnow(),
-                                                    "reason": f"Pending update current TV file deletion failure: {str(e)}"
-                                                })
-                                                if result.inserted_id:
+                                                try:
+                                                    result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                                        "chat_id": chat_id,
+                                                        "msg_id": msg_id,
+                                                        "created_at": datetime.utcnow(),
+                                                        "reason": f"Pending update current TV file deletion failure: {str(e)}"
+                                                    })
                                                     LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                                                except Exception as db_error:
+                                                    LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                                     except Exception as e:
                                         LOGGER.error(f"Failed to parse current TV file info for deletion: {e}")
 
@@ -2160,14 +2180,16 @@ class Database:
                             error_msg = str(e).lower()
                             LOGGER.error(f"Failed to delete message {msg_id} from {chat_id}: {e}. Please use Channel_Organizer bot to delete these.")
                             # Store for later deletion by external bot
-                            result = await self.dbs["tracking"]["require_user_delete"].insert_one({
-                                "chat_id": chat_id,
-                                "msg_id": msg_id,
-                                "created_at": datetime.utcnow(),
-                                "reason": f"Bulk resolve pending update loser deletion failure: {str(e)}"
-                            })
-                            if result.inserted_id:
+                            try:
+                                result = await self.dbs["tracking"]["require_user_delete"].insert_one({
+                                    "chat_id": chat_id,
+                                    "msg_id": msg_id,
+                                    "created_at": datetime.utcnow(),
+                                    "reason": f"Bulk resolve pending update loser deletion failure: {str(e)}"
+                                })
                                 LOGGER.info(f"Message {msg_id} from {chat_id} added to junk database for manual deletion.")
+                            except Exception as db_error:
+                                LOGGER.error(f"Failed to add message {msg_id} from {chat_id} to junk database: {db_error}")
                 except Exception as e:
                     LOGGER.error(f"Failed to parse loser pending file: {e}")
 
