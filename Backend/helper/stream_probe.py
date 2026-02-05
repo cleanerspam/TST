@@ -27,7 +27,7 @@ class StreamProbe:
     # -------------------------------------------------------------------------
     PATTERNS = {
         "dual_audio": re.compile(r"\b(dual|multi)[ ._-]?audio\b|\bstart[ ._-]?audio\b", re.IGNORECASE),
-        "esub": re.compile(r"\b(esub|e[ ._-]?sub)\b|\beng(lish)?[ ._-]?sub(s|title)?\b", re.IGNORECASE),
+        "esub": re.compile(r"\b(esubs?|e[ ._-]?subs?)\b|\beng(lish)?[ ._-]?sub(s|title)?\b", re.IGNORECASE),
         "hsub": re.compile(r"\b(hsub|h[ ._-]?sub)\b|\bhin(di)?[ ._-]?sub(s|title)?\b", re.IGNORECASE),
         "res_8k": re.compile(r"(8k|4320p?)", re.IGNORECASE),
         "res_4k": re.compile(r"(4k|2160p?)", re.IGNORECASE),
