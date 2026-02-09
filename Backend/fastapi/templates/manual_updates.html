@@ -551,14 +551,14 @@
                 });
 
                 rightColumnHtml = `
-                    <div class="flex flex-col bg-transparent h-full candidate-col relative group/list">
+                    <div class="flex flex-col bg-transparent h-full min-h-0 candidate-col relative group/list">
                         <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1 flex justify-between">
                             <span>Candidates (${item.candidates.length})</span>
                             <span class="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ${item.candidates.length > 1 ? '' : 'hidden'}">Scroll for more</span>
                         </h4>
                         
-                        <!-- Candidate List with Fixed Height for ~1 Item -->
-                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[160px] relative scroll-smooth" id="candidate-list-${cardId}">
+                        <!-- Candidate List (Fill Height) -->
+                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar relative scroll-smooth" id="candidate-list-${cardId}">
                             ${candidatesHtml}
                         </div>
                         
