@@ -1678,7 +1678,8 @@ class Database:
                         "$push": {
                             "_id": "$_id",
                             "new_file": "$new_file",
-                            "created_at": "$created_at"
+                            "created_at": "$created_at",
+                            "tech_analysis": "$tech_analysis"
                         }
                     }
                 }
@@ -1809,6 +1810,20 @@ class Database:
                 except Exception as e:
                     LOGGER.error(f"Failed to auto-resolve zombie conflict: {e}")
 
+            if old_file:
+                # Determine source for old file
+                # Default to Filename Probe. Check if transient analysis data exists.
+                old_file["source"] = "Filename Probe" # Default
+                
+                # Check first candidate's tech_analysis for old_source (all candidates in group share same old file)
+                if item["candidates"]:
+                    first_tech = item["candidates"][0].get("tech_analysis", {})
+                    if first_tech.get("old_source"):
+                         old_file["source"] = first_tech.get("old_source")
+                # Fallback to is_deep_probed if present (unlikely but safe)
+                elif old_file.get("is_deep_probed"):
+                    old_file["source"] = "Deep Probe"
+
             doc["old_file"] = old_file
 
             # Just retrieve the pending updates without auto-resolving them
@@ -1818,6 +1833,16 @@ class Database:
             # Add all candidates for manual review
             for cand in item["candidates"]:
                 cand_doc = convert_objectid_to_str(cand)
+                
+                # Determine source for candidate from transient tech_analysis or default
+                tech = cand.get("tech_analysis", {})
+                f_info = cand_doc.get("new_file", {})
+                
+                if tech.get("source"):
+                    cand_doc["source"] = tech.get("source")
+                else:
+                    cand_doc["source"] = "Deep Probe" if f_info.get("is_deep_probed") else "Filename Probe"
+                
                 final_candidates.append(cand_doc)
 
             doc["candidates"] = final_candidates
@@ -2849,7 +2874,8 @@ class Database:
                         "$push": {
                             "_id": "$_id",
                             "new_file": "$new_file",
-                            "created_at": "$created_at"
+                            "created_at": "$created_at",
+                            "tech_analysis": "$tech_analysis"
                         }
                     }
                 }
@@ -2899,10 +2925,42 @@ class Database:
 
             doc["old_file"] = old_file
 
+            if old_file:
+                # Determine source for old file
+                old_file["source"] = "Filename Probe" # Default
+                
+                # Check first candidate's tech_analysis for old_source (all candidates in group share same old file)
+                if item["candidates"]:
+                    first_tech = item["candidates"][0].get("tech_analysis", {})
+                    if first_tech.get("old_source"):
+                         old_file["source"] = first_tech.get("old_source")
+                # Fallback to is_deep_probed if present (unlikely but safe)
+                elif old_file.get("is_deep_probed"):
+                    old_file["source"] = "Deep Probe"
+
             # Skip auto-resolution checks for search results - we want to show all matches
             final_candidates = []
+
             for cand in item["candidates"]:
                 cand_doc = convert_objectid_to_str(cand)
+                
+                # Determine source for candidate from transient tech_analysis or default
+                tech = cand.get("tech_analysis", {})
+                f_info = cand_doc.get("new_file", {})
+                
+                if tech.get("source"):
+                    cand_doc["source"] = tech.get("source")
+                else:
+                    cand_doc["source"] = "Deep Probe" if f_info.get("is_deep_probed") else "Filename Probe"
+                
+                final_candidates.append(cand_doc)
+            for cand in item["candidates"]:
+                cand_doc = convert_objectid_to_str(cand)
+                
+                # Determine source for candidate
+                f_info = cand_doc.get("new_file", {})
+                cand_doc["source"] = "Deep Probe" if f_info.get("is_deep_probed") else "Filename Probe"
+                
                 final_candidates.append(cand_doc)
 
             doc["candidates"] = final_candidates
@@ -3126,6 +3184,8 @@ class Database:
             s_tags_old = p_old.get("semantic", StreamProbe.semantic_parse(old_info.get("name", "")))
             p_data_old = p_old.get("probe", {})
             score_old = QualityArbiter.calculate_score(p_data_old, s_tags_old, old_info)
+            old_is_deep = p_old.get("is_deep_probed", False)
+            old_source = "Deep Probe" if old_is_deep else "Filename Probe"
             
             # If old file missing, best candidate wins
             if not old_info:
@@ -3177,7 +3237,9 @@ class Database:
                     "doc": doc,
                     "score": score_new,
                     "info": new_info,
-                    "probe_result": p_new  # Store full result for sanitation later
+                    "info": new_info,
+                    "probe_result": p_new,  # Store full result for sanitation later
+                    "source": "Deep Probe" if p_new.get("is_deep_probed", False) else "Filename Probe"
                 })
             
             # Sort by score (highest first)
@@ -3201,6 +3263,8 @@ class Database:
                         "recommendation": "keep_new",
                         "new_score": cand["score"],
                         "old_score": score_old,
+                        "new_source": cand["source"],
+                        "old_source": old_source,
                         "is_best_candidate": True
                     }
                 elif decision == "keep_old":
@@ -3208,6 +3272,8 @@ class Database:
                         "recommendation": "keep_old",
                         "new_score": cand["score"],
                         "old_score": score_old,
+                        "new_source": cand["source"],
+                        "old_source": old_source,
                         "is_best_candidate": is_best
                     }
                 else:
@@ -3217,7 +3283,9 @@ class Database:
                         "new_score": cand["score"],
                         "old_score": score_old,
                         "is_best_candidate": False,
-                        "reason": "Another candidate scored higher"
+                        "reason": "Another candidate scored higher",
+                        "new_source": cand["source"],
+                        "old_source": old_source
                     }
                 
                 # Prepare Sanitized Tech Data
@@ -3231,7 +3299,8 @@ class Database:
                     "score_old": score_old,
                     "recommendation": final_decisions[p_id]["recommendation"],
                     "is_best_candidate": is_best,
-                    "probed_at": datetime.utcnow()
+                    "probed_at": datetime.utcnow(),
+                    "old_source": old_source
                 }
 
                 if is_deep:

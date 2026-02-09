@@ -539,6 +539,7 @@
                                  <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span>
                                  ${newFile.dc_id ? `<span class="bg-gray-200 px-1 rounded text-gray-700 border border-gray-300" title="Data Center ID">DC: ${newFile.dc_id}</span>` : ''}
                                  <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
+                                 <span id="source-badge-${cid}" class="uppercase bg-gray-100 px-1 rounded text-gray-500 border border-gray-200 text-[10px] font-bold tracking-wide shadow-sm" title="Probe Method">${cand.source || 'Filename Probe'}</span>
                                  <span class="text-[10px] italic text-gray-500">Added: ${new Date(cand.created_at).toLocaleDateString()}</span>
                             </div>
                             <!-- Score Breakdown Section -->
@@ -625,6 +626,8 @@
                                                 <span>Size: <span class="text-gray-900 font-bold">${oldFile.file_size || oldFile.size || 'N/A'}</span></span>
                                                 ${oldFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300" title="Data Center ID">DC: <span class="text-gray-900 font-bold">${oldFile.dc_id}</span></span>` : ''}
                                                  <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${fType}</span>
+                                                 <!-- Source Badge -->
+                                                 <span id="source-badge-old-${cardId}" class="uppercase bg-gray-100 px-1 rounded text-gray-500 border border-gray-200 text-[10px] font-bold tracking-wide shadow-sm ml-2" title="Probe Method">${oldFile.source || 'Filename Probe'}</span>
                                             </div>
                                         </div>
                                         <!-- Score Breakdown Section (Old) -->
@@ -1361,7 +1364,7 @@
                 if (breakdownEl) {
                     breakdownEl.innerHTML = `
                         <div class="flex justify-between items-center mb-1">
-                            <span class="font-bold text-primary">Quality Score: ${res.new_score.total_score} pts</span>
+                            <span class="font-bold text-primary">Quality Score: ${res.new_score.total_score} pts <span class="text-xs font-normal text-gray-500">(${res.new_source || 'Unknown'})</span></span>
                             ${res.new_score.has_perfect_combo ? '<span class="text-[9px] bg-yellow-500/20 text-yellow-500 px-1 rounded border border-yellow-500/30">PERFECT COMBO</span>' : ''}
                         </div>
                         <div class="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-80">
@@ -1370,6 +1373,10 @@
                     `;
                     breakdownEl.classList.remove('hidden');
                 }
+
+                // Update Source Badge (New)
+                const sourceBadge = document.getElementById(`source-badge-${pId}`);
+                if (sourceBadge && res.new_source) sourceBadge.textContent = res.new_source;
             }
 
             // --- OLD SCORE BREAKDOWN INJECTION (Per Card) ---
@@ -1378,7 +1385,7 @@
                 if (oldBreakdownEl && oldBreakdownEl.classList.contains('hidden')) { // Only inject once per card
                     oldBreakdownEl.innerHTML = `
                         <div class="flex justify-between items-center mb-1">
-                            <span class="font-bold text-red-600">Current Quality: ${res.old_score.total_score} pts</span>
+                            <span class="font-bold text-red-600">Quality Score: ${res.old_score.total_score} pts <span class="text-xs font-normal text-gray-500">(${res.old_source || 'Unknown'})</span></span>
                             ${res.old_score.has_perfect_combo ? '<span class="text-[9px] bg-yellow-500/20 text-yellow-500 px-1 rounded border border-yellow-500/30">PERFECT COMBO</span>' : ''}
                         </div>
                         <div class="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-80">
@@ -1387,6 +1394,10 @@
                     `;
                     oldBreakdownEl.classList.remove('hidden');
                 }
+
+                // Update Source Badge (Old)
+                const oldSourceBadge = document.getElementById(`source-badge-old-${card.id.replace('card-', '')}`);
+                if (oldSourceBadge && res.old_source) oldSourceBadge.textContent = res.old_source;
             }
 
             // --- GLOBAL REASON INJECTION ---
