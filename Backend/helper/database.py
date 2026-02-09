@@ -1,4 +1,7 @@
 
+
+import asyncio
+import random
 from asyncio import create_task
 from bson import ObjectId
 import motor.motor_asyncio
@@ -2946,7 +2949,40 @@ class Database:
                         return 0
         return 0
     
-    async def analyze_pending_items(self, pending_ids: List[str]):
+    async def run_analyze_background(self, task_id: str, pending_ids: List[str]):
+        """
+        Background wrapper for analysis to track progress.
+        """
+        # Initialize Task
+        self.active_tasks[task_id] = {
+            "status": "processing",
+            "total_cards": 0,
+            "processed_cards": 0,
+            "probes_deep": 0,
+            "probes_semantic": 0,
+            "details": "Starting analysis...",
+            "started_at": datetime.utcnow() 
+        }
+
+        try:
+            # Delegate to main logic (with task_id for progress updates)
+            await self.analyze_pending_items(pending_ids, task_id=task_id)
+            
+            # Completion
+            self.active_tasks[task_id]["status"] = "completed"
+            self.active_tasks[task_id]["details"] = "Analysis completed."
+            self.active_tasks[task_id]["completed_at"] = datetime.utcnow()
+
+        except Exception as e:
+            LOGGER.error(f"Analysis Task {task_id} failed: {e}")
+            self.active_tasks[task_id]["status"] = "failed"
+            self.active_tasks[task_id]["error"] = str(e)
+
+    async def analyze_pending_items(self, pending_ids: List[str], task_id: str = None):
+        """
+        Orchestrates the deep inspection and scoring for pending updates.
+        Now supports background task tracking and data sanitation.
+        """
         """
         Orchestrates the Deep Inspection & Scoring for a batch of pending updates.
         Handles MULTIPLE CANDIDATES per card:
@@ -2987,7 +3023,14 @@ class Database:
         # Get list of available bot indices for round-robin
         bot_indices = list(multi_clients.keys())
         num_bots = len(bot_indices) if bot_indices else 1
-        probe_counter = [0]  # Mutable counter for round-robin
+        
+        # RANDOMIZED START: Prevent always starting with Bot 0
+        start_offset = random.randint(0, num_bots - 1)
+        probe_counter = [start_offset]  
+        
+        if task_id and task_id in self.active_tasks:
+             self.active_tasks[task_id]["total_cards"] = len(card_groups)
+             self.active_tasks[task_id]["details"] = f"Queued {len(card_groups)} cards for analysis..."
         
         # 3. Prepare Probing List (all candidates + one old file per group)
         for key, docs in card_groups.items():
@@ -3132,7 +3175,8 @@ class Database:
                     "id": p_id,
                     "doc": doc,
                     "score": score_new,
-                    "info": new_info
+                    "info": new_info,
+                    "probe_result": p_new  # Store full result for sanitation later
                 })
             
             # Sort by score (highest first)
@@ -3175,19 +3219,49 @@ class Database:
                         "reason": "Another candidate scored higher"
                     }
                 
+                # Prepare Sanitized Tech Data
+                raw_res = cand.get("probe_result", {})
+                is_deep = raw_res.get("is_deep_probed", False)
+                
+                tech_data = {
+                    "last_updated": datetime.utcnow(),
+                    "source": "deep_probe" if is_deep else "semantic",
+                    "score": cand["score"],
+                    "score_old": score_old,
+                    "recommendation": final_decisions[p_id]["recommendation"],
+                    "is_best_candidate": is_best,
+                    "probed_at": datetime.utcnow()
+                }
+
+                if is_deep:
+                    # SANITIZATION: Prune raw FFprobe JSON
+                    raw = raw_res.get("probe", {})
+                    tech_data.update({
+                        "video": raw.get("video", {}), 
+                        "audio": [{"codec": a.get("codec"), "lang": a.get("lang"), "channels": a.get("channels")} for a in raw.get("audio", [])],
+                        "subtitle": [{"codec": s.get("codec"), "lang": s.get("lang"), "is_sdh": s.get("is_sdh")} for s in raw.get("subtitle", [])],
+                        "duration": raw.get("duration"),
+                        "size": raw.get("size"),
+                        "container": raw.get("container")
+                    })
+                else:
+                    # Semantic Fallback
+                    tech_data.update(raw_res.get("semantic", {}))
+
                 # Persist Tech Metadata
                 await self.dbs["tracking"]["pending_updates"].update_one(
                     {"_id": ObjectId(p_id)},
                     {"$set": {
-                        "tech_analysis": {
-                            "score": cand["score"],
-                            "score_old": score_old,
-                            "recommendation": final_decisions[p_id]["recommendation"],
-                            "is_best_candidate": is_best,
-                            "probed_at": datetime.utcnow()
-                        }
+                        "tech_analysis": tech_data
                     }}
                 )
+
+            # Update Progress per Card (Task Tracking)
+            if task_id and task_id in self.active_tasks:
+                 self.active_tasks[task_id]["processed_cards"] += 1
+                 processed = self.active_tasks[task_id]["processed_cards"]
+                 total = self.active_tasks[task_id]["total_cards"]
+                 self.active_tasks[task_id]["details"] = f"Analyzed {processed}/{total} cards"
 
         return final_decisions
 

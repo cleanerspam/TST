@@ -318,29 +318,29 @@ async def reidentify_update_route(
 
 @router.post("/updates/analyze")
 async def analyze_updates_route(
+    background_tasks: BackgroundTasks,
     payload: dict = Body(...),
     current_user: str = Depends(get_current_user)
 ):
     """
-    Trigger Deep Inspection & Scoring for a batch of pending updates.
+    Trigger Deep Inspection & Scoring for a batch of pending updates (Background).
+    Returns a task_id to poll status.
     """
     from Backend.logger import LOGGER
-    import traceback
     
     pending_ids = payload.get("pending_ids", [])
     LOGGER.info(f"Analyze request received with {len(pending_ids)} pending_ids")
     
     if not pending_ids:
         raise HTTPException(status_code=400, detail="No pending_ids provided")
-        
-    try:
-        results = await db.analyze_pending_items(pending_ids)
-        LOGGER.info(f"Analyze completed: {len(results)} results")
-        return {"results": results}
-    except Exception as e:
-        LOGGER.error(f"Analyze failed: {e}")
-        LOGGER.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    task_id = str(uuid.uuid4())
+    background_tasks.add_task(db.run_analyze_background, task_id, pending_ids)
+    
+    return {
+        "message": "Analysis initiated.",
+        "task_id": task_id
+    }
 
 @router.post("/updates/bulk_resolve")
 async def bulk_resolve_updates(

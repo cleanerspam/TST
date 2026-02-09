@@ -75,6 +75,12 @@
                 <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
             </button>
 
+            <!-- Analyze Button -->
+            <button onclick="TriggerAnalysis()" id="btn-analyze-all"
+                class="flex items-center space-x-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md active:scale-95 focus:outline-none border border-indigo-400/30">
+                <i class="fas fa-microchip"></i> <span>Deep Scan</span>
+            </button>
+
             <!-- Auto-Resolve Toggle -->
             <div id="auto-resolve-container"
                 class="flex items-center space-x-3 theme-card px-4 py-2 rounded-lg border border-gray-700/50 transition-all duration-300 shadow-md active:scale-[0.98]">
@@ -153,6 +159,18 @@
             </div>
             <div class="w-full bg-gray-700 rounded-full h-4 overflow-hidden">
                 <div id="progress-bar" class="bg-primary h-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Analysis Stats (Hidden by default) -->
+        <div id="analysis-stats" class="grid grid-cols-2 gap-4 mb-6 hidden">
+            <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                <div class="text-xs text-gray-400 uppercase">Deep Probes</div>
+                <div class="text-xl font-bold text-green-400" id="stat-deep">0</div>
+            </div>
+            <div class="bg-gray-800/50 p-3 rounded border border-gray-700">
+                <div class="text-xs text-gray-400 uppercase">Semantic Fallback</div>
+                <div class="text-xl font-bold text-yellow-400" id="stat-semantic">0</div>
             </div>
         </div>
 
@@ -536,11 +554,19 @@
                 });
 
                 rightColumnHtml = `
-                    <div class="flex flex-col bg-transparent h-full candidate-col">
-                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Candidates (${item.candidates.length})</h4>
-                        <div class="flex flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[600px]">
+                    <div class="flex flex-col bg-transparent h-full candidate-col relative group/list">
+                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1 flex justify-between">
+                            <span>Candidates (${item.candidates.length})</span>
+                            <span class="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ${item.candidates.length > 1 ? '' : 'hidden'}">Scroll for more</span>
+                        </h4>
+                        
+                        <!-- Candidate List with Fixed Height for 1 Item -->
+                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[160px] min-h-[160px] relative scroll-smooth" id="candidate-list-${cardId}">
                             ${candidatesHtml}
                         </div>
+                        
+                        <!-- Scroll Shadow Hint (Visible if more items) -->
+                         <div class="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-100 to-transparent pointer-events-none opacity-0 group-hover/list:opacity-100 transition-opacity ${item.candidates.length > 1 ? '' : 'hidden'}"></div>
                     </div>
                 `;
             }
@@ -676,7 +702,7 @@
 
     function updateCardUI(id, groupId, isSelected) {
         const selectedAction = selections[id];
-        
+
         // --- 1. Handle ACCEPT Button (Candidate Column) ---
         const btnAccept = document.getElementById(`btn-accept-${id}`);
         const iconAccept = document.getElementById(`icon-accept-${id}`);
@@ -739,7 +765,7 @@
                 // We need to know the ACTION associated with that ID, but we only have `id` passed to this function.
                 // However, `groupSelections[groupId]` gives us the ID currently dominating the card.
                 const action = selections[activeId];
-                
+
                 if (action === 'keep_new') {
                     card.classList.add('ring-2', 'ring-green-500');
                 } else if (action === 'keep_old') {
@@ -1310,6 +1336,19 @@
                 // Use Standard Selection Logic to ensure Button State is correct
                 toggleSelection(pId, 'keep_new', card.id.replace('card-', ''));
 
+                // --- SORTING: MOVE TO TOP ---
+                const candidateItem = document.querySelector(`[data-candidate-id="${pId}"]`);
+                if (candidateItem) {
+                    const listContainer = candidateItem.closest('.flex-col.overflow-y-auto'); // Find parent list
+                    if (listContainer) {
+                        listContainer.prepend(candidateItem);
+                        listContainer.scrollTop = 0; // Ensure visible
+                        // Highlight effect
+                        candidateItem.classList.add('ring-2', 'ring-green-400', 'bg-green-50/10');
+                        setTimeout(() => candidateItem.classList.remove('ring-2', 'ring-green-400', 'bg-green-50/10'), 2000);
+                    }
+                }
+
                 // Add "Best" badge visual only (toggleSelection handles the button)
                 const badgeTarget = document.querySelector(`[data-candidate-id="${pId}"]`) || newCol;
                 if (badgeTarget && !badgeTarget.querySelector('.fa-crown')) { // Avoid dupes
@@ -1547,5 +1586,96 @@
     }
 
 
+
+    // --- DEEP PROBE ANALYSIS LOGIC ---
+
+    async function TriggerAnalysis() {
+        // Gather ALL pending IDs from the DOM
+        const pendingIds = new Set();
+        document.querySelectorAll('[data-pending-id]').forEach(el => {
+            pendingIds.add(el.getAttribute('data-pending-id'));
+        });
+
+        if (pendingIds.size === 0) return showToast("No items to scan", "error");
+
+        const idsArray = Array.from(pendingIds);
+
+        // UI Setup
+        const modal = document.getElementById('progress-modal');
+        const statsInfo = document.getElementById('analysis-stats');
+        statsInfo.classList.remove('hidden');
+        modal.classList.remove('hidden');
+        document.getElementById('progress-text').textContent = "Initiating Scan...";
+        document.getElementById('progress-bar').style.width = "0%";
+        document.getElementById('stat-deep').textContent = "0";
+        document.getElementById('stat-semantic').textContent = "0";
+
+        try {
+            const response = await fetch('/api/admin/updates/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pending_ids: idsArray })
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.task_id) {
+                pollAnalysisStatus(data.task_id);
+            } else {
+                showToast(data.detail || "Analysis failed to start", "error");
+                modal.classList.add('hidden');
+            }
+        } catch (e) {
+            console.error(e);
+            showToast("Network error", "error");
+            modal.classList.add('hidden');
+        }
+    }
+
+    function pollAnalysisStatus(taskId) {
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const progressPercent = document.getElementById('progress-percentage');
+        const progressDetail = document.getElementById('progress-detail');
+        const statDeep = document.getElementById('stat-deep');
+        const statSemantic = document.getElementById('stat-semantic');
+
+        const poll = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/admin/updates/task/${taskId}`);
+                if (!res.ok) throw new Error("Status check failed");
+
+                const status = await res.json();
+
+                // Update Basic Progress
+                const total = status.total || 1;
+                const processed = status.processed_cards || 0; // Note: run_analyze_background uses 'processed_cards'
+                const percent = Math.round((processed / total) * 100);
+
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `Scanned ${processed} of ${total} cards`;
+                progressPercent.textContent = `${percent}%`;
+                if (status.details) progressDetail.textContent = status.details;
+
+                // Update Detailed Stats
+                if (status.probes_deep !== undefined) statDeep.textContent = status.probes_deep;
+                if (status.probes_semantic !== undefined) statSemantic.textContent = status.probes_semantic;
+
+                if (status.status === 'completed' || status.status === 'failed') {
+                    clearInterval(poll);
+                    if (status.status === 'completed') {
+                        showToast("Deep Scan Completed!", "success");
+                        setTimeout(() => window.location.reload(), 1000);
+                    } else {
+                        showToast("Scan failed: " + status.error, "error");
+                        document.getElementById('progress-done-btn').classList.remove('hidden');
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+                // Don't clear interval immediately on one error, could be transient
+            }
+        }, 1000);
+    }
 </script>
 {% endblock %}

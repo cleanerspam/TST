@@ -204,66 +204,91 @@ class StreamProbe:
     # -------------------------------------------------------------------------
     # 3. Parallel Execution Logic
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # 3. Parallel Execution Logic
+    # -------------------------------------------------------------------------
+    _bot_locks: Dict[int, asyncio.Lock] = {}
+
+    @classmethod
+    def get_bot_lock(cls, bot_id: int) -> asyncio.Lock:
+        if bot_id not in cls._bot_locks:
+            cls._bot_locks[bot_id] = asyncio.Lock()
+        return cls._bot_locks[bot_id]
+
     @staticmethod
     async def parallel_probe(files: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Probes a list of files in parallel using available bots.
-        Args:
-            files: List of dicts, each containing {"id": "unique_id", "link": "http...", "filename": "...", "tg_file_ref": {...}}
-            * tg_file_ref: Optional dict with {"client": client_obj, "chat_id": int, "msg_id": int}
+        Safely manages concurrency to prevent FloodWait:
+        - Global Limit: len(multi_clients) (One probe per bot)
+        - Per-Bot Limit: 1 (Strictly one connection per account)
         """
         results = {}
-        # Reduced from 10 to 3 to prevent overwhelming Telegram API
-        semaphore = asyncio.Semaphore(3)
-        probe_count = [0]  # Mutable counter for delay logic
+        # Dynamic semaphore based on available bots (min 1, max 20)
+        num_bots = max(1, len(multi_clients))
+        # Allow slightly more global parallelism than bots to keep pipeline full, 
+        # but locks will ensure strict 1-per-bot execution.
+        global_sem = asyncio.Semaphore(num_bots + 2) 
 
         async def _worker(file_info):
-            async with semaphore:
-                # Add small delay every 3 probes to prevent rate limiting
-                probe_count[0] += 1
-                if probe_count[0] > 1 and probe_count[0] % 3 == 0:
-                    await asyncio.sleep(0.5)
-                
+            async with global_sem:
                 # 1. Semantic Parse (Always runs)
                 semantic = StreamProbe.semantic_parse(file_info["filename"])
                 
                 # 2. Live Probe
                 probe_data = {}
                 error = None
+                is_deep_probed = False
                 
                 # Safety Check: Warn if missing download context
                 if "tg_file_ref" not in file_info and "link" not in file_info:
-                    LOGGER.warning(f"PROBE SKIP: Missing download context for [{file_info.get('id')}]. Will use semantic fallback only.")
+                    LOGGER.debug(f"PROBE SKIP: Missing download context for [{file_info.get('id')}].")
                 
                 try:
                     # A. Telegram Partial Download (Preferred)
                     if "tg_file_ref" in file_info:
                         ref = file_info["tg_file_ref"]
-                        # Passing the original client for ref, but probe_telegram_file handles retry internally if needed
-                        probe_data = await StreamProbe.probe_telegram_file(
-                            ref["client"], ref["chat_id"], ref["msg_id"]
-                        )
+                        client = ref["client"]
+                        # Get the Bot ID (or index) to lock on
+                        # We use the index passed in 'client_index' if available, else derive from client ID
+                        bot_idx = ref.get("client_index")
+                        if bot_idx is None:
+                            # Fallback if index not provided (rare)
+                            bot_idx = id(client)
+
+                        # Acquire Lock for THIS SPECIFIC BOT
+                        # This ensures this bot is doing absolutely nothing else while probing this file
+                        async with StreamProbe.get_bot_lock(bot_idx):
+                            # LOGGER.debug(f"Acquired lock for Bot {bot_idx}, probing {file_info.get('id')}")
+                            probe_data = await StreamProbe.probe_telegram_file(
+                                client, ref["chat_id"], ref["msg_id"]
+                            )
                         
                     # B. Direct Link (Fallback/Alternative)
                     elif "link" in file_info and file_info["link"]:
                          probe_data = await StreamProbe.probe_file(file_info["link"])
                          
+                    # Check if we actually got tech metadata
+                    if probe_data and (probe_data.get("video") or probe_data.get("audio")):
+                        is_deep_probed = True
+                         
                 except Exception as e:
                     error = str(e)
-                    # Log at debug level for probes (they fail often for deleted files)
                     LOGGER.debug(f"Probe failed for {file_info.get('id')}: {e}")
 
                 # 3. Merge
                 if "error" in probe_data:
                     error = probe_data["error"]
                     probe_data = {} # Reset if error
+                    is_deep_probed = False
 
                 results[file_info["id"]] = {
                     "filename": file_info["filename"],
                     "semantic": semantic,
                     "probe": probe_data,
                     "error": error,
-                    "probed_at": 1 # timestamp placement
+                    "is_deep_probed": is_deep_probed,
+                    "probed_at": datetime.utcnow()
                 }
 
         tasks = [_worker(f) for f in files]
@@ -277,165 +302,157 @@ class StreamProbe:
     async def probe_telegram_file(initial_client, chat_id: int, msg_id: int) -> Dict[str, Any]:
         """
         Downloads the first 5MB of a Telegram file to a temp file using ByteStreamer.
-        Includes RETRY LOGIC: If a client/bot fails, it tries the next available bot.
+        Strictly uses the provided client to respect bot locks.
         """
         global probe_success_count, probe_failure_count, current_batch_total
 
         import os
         import time
         import secrets
+        import tempfile
         from Backend.helper.custom_dl import ByteStreamer
         from Backend.pyrofork.bot import multi_clients
-        from Backend.config import Telegram
         
-        # Gather all available clients
-        # 1. Start with the client that was passed in (to respect the initial context)
-        # 2. Add rest of the clients as fallback
+        # Use cross-platform temp directory
+        temp_dir = tempfile.gettempdir()
+        temp_filename = f"probe_{chat_id}_{msg_id}_{int(time.time())}.mkv"
+        temp_file = os.path.join(temp_dir, temp_filename)
         
-        available_clients = [initial_client]
-        for idx, client in multi_clients.items():
-            if client != initial_client:
-                available_clients.append(client)
-
-        temp_file = f"/tmp/probe_{chat_id}_{msg_id}_{int(time.time())}.mkv"
         stream_id_base = f"probe_{secrets.token_hex(6)}"
-        
         last_error = None
 
-        for attempt, client in enumerate(available_clients):
-            try:
-                # LOGGER.info(f"Probing with Client #{attempt+1}...")
-                
-                # --- Worker Function (Same as before, just inside loop) ---
-                async def download_range(streamer, file_id, client_index, offset, part_count, sid):
-                    """Download a specific range of the file."""
-                    chunk_size = 1024 * 1024  # 1MB
-                    data = bytearray()
-                    
-                    body_gen = streamer.prefetch_stream(
-                        file_id=file_id,
-                        client_index=client_index,
-                        offset=offset,
-                        first_part_cut=0,
-                        last_part_cut=chunk_size,
-                        part_count=part_count,
-                        chunk_size=chunk_size,
-                        prefetch=1,
-                        stream_id=sid,
-                        meta={"type": "probe"},
-                        parallelism=1,
-                        additional_client_indices=[]
-                    )
-                    
-                    try:
-                        async with asyncio.timeout(20):
-                            async for chunk in body_gen:
-                                if chunk:
-                                    data.extend(chunk)
-                    except asyncio.TimeoutError:
-                        LOGGER.warning(f"Probe Stream Timeout using client {client_index}")
-                        raise Exception("Timeout")
-                    
-                    return bytes(data)
+        # We ONLY use the initial_client passed to us. 
+        # The parallel_probe logic handles load balancing. 
+        # We don't want this function to "go rogue" and switch to another bot 
+        # that might be locked by another thread.
+        client = initial_client
 
-                # 1. Initialize ByteStreamer
-                streamer = ByteStreamer(client)
+        try:
+            # --- Worker Function (Same as before, just inside loop) ---
+            async def download_range(streamer, file_id, client_index, offset, part_count, sid):
+                """Download a specific range of the file."""
+                # Increased buffer to 1MB chunks
+                chunk_size = 1024 * 1024 
+                data = bytearray()
                 
-                # 2. Get File Properties
+                body_gen = streamer.prefetch_stream(
+                    file_id=file_id,
+                    client_index=client_index,
+                    offset=offset,
+                    first_part_cut=0,
+                    last_part_cut=chunk_size,
+                    part_count=part_count,
+                    chunk_size=chunk_size,
+                    prefetch=1,
+                    stream_id=sid,
+                    meta={"type": "probe"},
+                    parallelism=1,
+                    additional_client_indices=[] # STRICT: No helpers
+                )
+                
                 try:
-                    file_id = await asyncio.wait_for(
-                        streamer.get_file_properties(chat_id, msg_id),
-                        timeout=10.0
-                    )
+                    # Increased timeout to 30s as requested
+                    async with asyncio.timeout(30):
+                        async for chunk in body_gen:
+                            if chunk:
+                                data.extend(chunk)
+                except asyncio.TimeoutError:
+                    LOGGER.warning(f"Probe Stream Timeout using client {client_index}")
+                    return None
                 except Exception as e:
-                    # LOGGER.warning(f"Client {attempt} failed to get props: {e}")
-                    raise e
+                    LOGGER.warning(f"Probe Stream Error: {e}")
+                    return None
                 
-                # 3. Determine Client Index
-                client_index = next((k for k, v in multi_clients.items() if v == client), 0)
-                
-                chunk_size = 1024 * 1024
-                file_size = file_id.file_size
-                stream_id = f"{stream_id_base}_{attempt}"
+                return bytes(data)
 
-                # 4. Smart Download Strategy
-                if file_size < 4 * chunk_size:
-                    part_count = max(1, (file_size // chunk_size) + 1)
-                    first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
+            # 1. Initialize ByteStreamer
+            streamer = ByteStreamer(client)
+            
+            # 2. Get File Properties
+            try:
+                file_id = await asyncio.wait_for(
+                    streamer.get_file_properties(chat_id, msg_id),
+                    timeout=10.0
+                )
+            except Exception as e:
+                raise e
+            
+            # 3. Determine Client Index
+            client_index = next((k for k, v in multi_clients.items() if v == client), 0)
+            
+            chunk_size = 1024 * 1024
+            file_size = file_id.file_size
+            stream_id = f"{stream_id_base}_direct"
 
-                    if not first_data:
-                        LOGGER.warning(f"Chunk 0 download failed for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1})")
-                        raise Exception("Empty Data")
+            # 4. Smart Download Strategy
+            # Analyze first 5MB (Increased from 2MB)
+            PROBE_SIZE_MB = 5
+            parts_to_dl = PROBE_SIZE_MB
+            
+            if file_size < PROBE_SIZE_MB * chunk_size:
+                # Small file: Download all
+                part_count = max(1, (file_size // chunk_size) + 1)
+                first_data = await download_range(streamer, file_id, client_index, 0, part_count, stream_id)
 
-                    probe_success_count += 1
-                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-                    LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for small file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
-
-                    with open(temp_file, "wb") as f:
-                        f.write(first_data)
-                    return await StreamProbe.probe_file(temp_file)
-                
-                # Step 1: Download first 2MB
-                first_data = await download_range(streamer, file_id, client_index, 0, 2, f"{stream_id}_start")
                 if not first_data:
-                    LOGGER.warning(f"Chunk 0 download failed for client {client_index} (attempt {attempt+1})")
-                    raise Exception("Empty Data")
+                    raise Exception("Empty Data (Small File)")
 
                 probe_success_count += 1
-                completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-                LOGGER.info(f"FFPROBE SUCCESS: Chunk 0 downloaded for file (chat_id={chat_id}, msg_id={msg_id}) using client {client_index} (attempt {attempt+1}) - {len(first_data)} bytes [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
+                LOGGER.info(f"FFPROBE SUCC: Small file (Bot {client_index}) - {len(first_data)} bytes [{probe_success_count}/{current_batch_total}]")
 
                 with open(temp_file, "wb") as f:
                     f.write(first_data)
+                return await StreamProbe.probe_file(temp_file)
+            
+            # Large File: Download first 5MB
+            first_data = await download_range(streamer, file_id, client_index, 0, parts_to_dl, f"{stream_id}_start")
+            if not first_data:
+                raise Exception("Empty Data (Header)")
+
+            # Write temp file safely
+            with open(temp_file, "wb") as f:
+                f.write(first_data)
+            
+            # Probe Header
+            result = await StreamProbe.probe_file(temp_file)
+            if result.get("video") or result.get("audio"):
+                probe_success_count += 1
+                LOGGER.info(f"FFPROBE SUCC: Header analysis (Bot {client_index}) [{probe_success_count}/{current_batch_total}]")
+                return result
                 
+            # If header failed, try last 2 chunks (MP4 moov atom at end?)
+            # This is a fallback attempt
+            last_offset = max(0, (file_size // chunk_size) - 2)
+            last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
+
+            if last_data:
+                LOGGER.info(f"FFPROBE: Fetching trailer for MOOV atom (Bot {client_index})...")
+                with open(temp_file, "ab") as f: # Append
+                    f.write(last_data)
                 result = await StreamProbe.probe_file(temp_file)
                 if result.get("video") or result.get("audio"):
                     probe_success_count += 1
-                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-                    LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
-                    return result
-                    
-                # Step 2: Last chunk (for MP4)
-                last_offset = max(0, (file_size // chunk_size) - 2)
-                last_data = await download_range(streamer, file_id, client_index, last_offset * chunk_size, 2, f"{stream_id}_end")
-
-                if last_data:
-                    LOGGER.info(f"FFPROBE PARTIAL SUCCESS: First chunk succeeded but no media data, using last chunk for file (chat_id={chat_id}, msg_id={msg_id}) - additional {len(last_data)} bytes")
-                    with open(temp_file, "wb") as f:
-                        f.write(first_data)
-                        f.write(last_data)
-                    result = await StreamProbe.probe_file(temp_file)
-                    if result.get("video") or result.get("audio"):
-                        probe_success_count += 1
-                        completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-                        LOGGER.info(f"FFPROBE ANALYSIS SUCCESS: Media analysis completed using both chunks for file (chat_id={chat_id}, msg_id={msg_id}) [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
-                    return result
+                    LOGGER.info(f"FFPROBE SUCC: Header+Trailer (Bot {client_index}) [{probe_success_count}/{current_batch_total}]")
                 else:
-                    LOGGER.warning(f"FFPROBE PARTIAL: First chunk succeeded but last chunk failed for file (chat_id={chat_id}, msg_id={msg_id})")
+                    LOGGER.info(f"FFPROBE FAIL: Even with trailer (Bot {client_index})")
+                return result
 
-                return result # Return whatever we got
+            return result # Return whatever we got from header
 
-            except Exception as e:
-                # Also increment failure counter for exceptions during probing
-                if "Empty Data" in str(e) or "All bots failed" in str(e):
-                    probe_failure_count += 1
-                    completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-                    LOGGER.warning(f"FFPROBE EXCEPTION: Failed to download chunk 0 for file (chat_id={chat_id}, msg_id={msg_id}), error: {e} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
+        except Exception as e:
+            if "Empty Data" in str(e):
+                probe_failure_count += 1
+                LOGGER.warning(f"FFPROBE FAIL: {e}")
+            last_error = e
+            return {"error": str(e)}
 
-                # LOGGER.warning(f"Probe attempt {attempt+1} failed: {e}")
-                last_error = e
-                # Clean up and continue to next bot
-                if os.path.exists(temp_file):
+        finally:
+            # STRICT CLEANUP
+            if os.path.exists(temp_file):
+                try:
                     os.remove(temp_file)
-                continue
-
-        # If loop finishes without return
-        failed_count = len(available_clients)  # Number of bots that failed
-        from Backend.logger import LOGGER
-        probe_failure_count += 1
-        completion_percentage = ((probe_success_count + probe_failure_count) / current_batch_total * 100) if current_batch_total > 0 else 0
-        LOGGER.error(f"FFPROBE FAILED for file (chat_id={chat_id}, msg_id={msg_id}): All {failed_count} bots failed to get chunk 0. Last error: {last_error} [Batch: {probe_success_count} successful, {probe_failure_count} failed, {completion_percentage:.1f}% complete]")
-        return {"error": f"All bots failed. Last error: {last_error}"}
+                except Exception as e:
+                    LOGGER.error(f"Failed to remove temp file {temp_file}: {e}")
 
 
 def get_probe_statistics():
