@@ -2966,10 +2966,11 @@ class Database:
 
         try:
             # Delegate to main logic (with task_id for progress updates)
-            await self.analyze_pending_items(pending_ids, task_id=task_id)
+            decisions = await self.analyze_pending_items(pending_ids, task_id=task_id)
             
             # Completion
             self.active_tasks[task_id]["status"] = "completed"
+            self.active_tasks[task_id]["results"] = decisions
             self.active_tasks[task_id]["details"] = "Analysis completed."
             self.active_tasks[task_id]["completed_at"] = datetime.utcnow()
 

@@ -8,6 +8,8 @@ from typing import Dict, Any, List, Optional
 from Backend.config import Telegram
 from Backend.helper.task_manager import get_next_client, multi_clients
 from Backend.logger import LOGGER
+from datetime import datetime
+import random
 
 # Module-level counters for tracking probe statistics
 # These will be reset for each batch of files

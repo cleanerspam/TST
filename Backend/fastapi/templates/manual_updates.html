@@ -75,11 +75,7 @@
                 <i class="fas fa-sync-alt"></i> <span>Clear Search</span>
             </button>
 
-            <!-- Analyze Button -->
-            <button onclick="TriggerAnalysis()" id="btn-analyze-all"
-                class="flex items-center space-x-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-md active:scale-95 focus:outline-none border border-indigo-400/30">
-                <i class="fas fa-microchip"></i> <span>Deep Scan</span>
-            </button>
+
 
             <!-- Auto-Resolve Toggle -->
             <div id="auto-resolve-container"
@@ -1257,22 +1253,20 @@
                 body: JSON.stringify({ pending_ids: pendingIdsArray })
             });
 
-            console.log('Analysis results:', data);
+            console.log('Analysis initiated:', data);
 
-            // 4. Apply visuals & selections
-            if (data && data.results) {
-                applyAnalysisResults(data.results);
-                startAutoSubmitTimer();
+            if (data && data.task_id) {
+                // Hand off to polling logic
+                pollAnalysisStatus(data.task_id, true);
             } else {
-                throw new Error("Invalid response format");
+                throw new Error(data.detail || "Failed to start analysis");
             }
 
         } catch (e) {
             console.error(e);
             showToast("Analysis failed after retries. Please try again.", "error");
             resetAutoResolveUI(); // This resets the lock
-        } finally {
-            // STOP Visual indicator
+            // Stop visuals on error
             document.getElementById('auto-resolve-status').classList.add('hidden');
             document.getElementById('auto-resolve-container').classList.remove('scanning-active');
         }
@@ -1632,13 +1626,19 @@
         }
     }
 
-    function pollAnalysisStatus(taskId) {
+    function pollAnalysisStatus(taskId, isAuto = false) {
         const progressBar = document.getElementById('progress-bar');
         const progressText = document.getElementById('progress-text');
         const progressPercent = document.getElementById('progress-percentage');
         const progressDetail = document.getElementById('progress-detail');
         const statDeep = document.getElementById('stat-deep');
         const statSemantic = document.getElementById('stat-semantic');
+        const autoStat = document.getElementById('auto-resolve-status');
+
+        if (!isAuto) {
+            const modal = document.getElementById('progress-modal');
+            modal.classList.remove('hidden');
+        }
 
         const poll = setInterval(async () => {
             try {
@@ -1648,28 +1648,51 @@
                 const status = await res.json();
 
                 // Update Basic Progress
-                const total = status.total || 1;
+                const total = status.total || status.total_cards || 1;
                 const processed = status.processed_cards || 0; // Note: run_analyze_background uses 'processed_cards'
                 const percent = Math.round((processed / total) * 100);
 
-                progressBar.style.width = `${percent}%`;
-                progressText.textContent = `Scanned ${processed} of ${total} cards`;
-                progressPercent.textContent = `${percent}%`;
-                if (status.details) progressDetail.textContent = status.details;
+                if (progressBar) progressBar.style.width = `${percent}%`;
+                if (progressText) progressText.textContent = `Scanned ${processed} of ${total} cards`;
+                if (progressPercent) progressPercent.textContent = `${percent}%`;
+                if (status.details && progressDetail) progressDetail.textContent = status.details;
+
+                // Update Auto-Resolve Button Text
+                if (isAuto && autoStat) {
+                    autoStat.innerHTML = `<i class="fas fa-microchip fa-spin mr-1"></i> Scanning ${processed}/${total}`;
+                }
 
                 // Update Detailed Stats
-                if (status.probes_deep !== undefined) statDeep.textContent = status.probes_deep;
-                if (status.probes_semantic !== undefined) statSemantic.textContent = status.probes_semantic;
+                if (status.probes_deep !== undefined && statDeep) statDeep.textContent = status.probes_deep;
+                if (status.probes_semantic !== undefined && statSemantic) statSemantic.textContent = status.probes_semantic;
 
                 if (status.status === 'completed' || status.status === 'failed') {
                     clearInterval(poll);
+
                     if (status.status === 'completed') {
-                        showToast("Deep Scan Completed!", "success");
-                        setTimeout(() => window.location.reload(), 1000);
+                        if (isAuto && status.results) {
+                            showToast("Analysis complete. Reviewing candidates...", "success");
+                            applyAnalysisResults(status.results);
+                            startAutoSubmitTimer();
+                        } else {
+                            showToast("Deep Scan Completed!", "success");
+                            setTimeout(() => window.location.reload(), 1000);
+                        }
                     } else {
                         showToast("Scan failed: " + status.error, "error");
-                        document.getElementById('progress-done-btn').classList.remove('hidden');
+                        if (!isAuto) document.getElementById('progress-done-btn').classList.remove('hidden');
                     }
+
+                    // Reset Auto-Resolve Visuals (Scanner)
+                    if (isAuto) {
+                        if (autoStat) autoStat.innerHTML = `<i class="fas fa-check mr-1"></i> Done`;
+                        // Keep text for a moment or hide? 
+                        // The user wanted "progress inside the button". 
+                        // Maybe keep it visible until auto-submit fires.
+                    }
+
+                    // Stop the 'scanning-active' pulse but keep the status text visible if needed
+                    document.getElementById('auto-resolve-container').classList.remove('scanning-active');
                 }
             } catch (e) {
                 console.error(e);
