@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Manage Updates - Telegram Stremio{% endblock %}
+{% block title %}Pending Updates - Telegram Stremio{% endblock %}
 
 {% block content %}
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 pb-32">
@@ -560,8 +560,8 @@
                             <span class="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ${item.candidates.length > 1 ? '' : 'hidden'}">Scroll for more</span>
                         </h4>
                         
-                        <!-- Candidate List with Fixed Height for 1 Item -->
-                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[160px] min-h-[160px] relative scroll-smooth" id="candidate-list-${cardId}">
+                        <!-- Candidate List with Fixed Height for ~1 Item -->
+                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[160px] relative scroll-smooth" id="candidate-list-${cardId}">
                             ${candidatesHtml}
                         </div>
                         
@@ -1339,7 +1339,7 @@
                 // --- SORTING: MOVE TO TOP ---
                 const candidateItem = document.querySelector(`[data-candidate-id="${pId}"]`);
                 if (candidateItem) {
-                    const listContainer = candidateItem.closest('.flex-col.overflow-y-auto'); // Find parent list
+                    const listContainer = candidateItem.closest('[id^="candidate-list-"]'); // Safer selector
                     if (listContainer) {
                         listContainer.prepend(candidateItem);
                         listContainer.scrollTop = 0; // Ensure visible
