@@ -506,7 +506,7 @@
                     const fName = newFile.file_name || newFile.name || 'Unknown';
 
                     candidatesHtml += `
-                        <div class="bg-white/5 p-3 rounded border border-gray-700 mb-3 last:mb-0 relative transition-all overflow-hidden" data-candidate-id="${cid}">
+                        <div class="bg-white/5 p-3 rounded border border-gray-700 mb-3 last:mb-0 relative transition-all overflow-hidden flex-shrink-0" data-candidate-id="${cid}">
                             <div class="flex justify-between items-start mb-2">
                                 <div class="text-xs break-all text-gray-900 font-mono bg-white border border-gray-200 p-2 rounded leading-relaxed shadow-sm w-full mr-2">
                                     ${fName}
@@ -536,9 +536,9 @@
                 });
 
                 rightColumnHtml = `
-                    <div class="flex flex-col bg-transparent h-full min-h-0 candidate-col">
+                    <div class="flex flex-col bg-transparent h-full candidate-col">
                         <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Candidates (${item.candidates.length})</h4>
-                        <div class="flex flex-col space-y-3 flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar max-h-[400px]">
+                        <div class="flex flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[600px]">
                             ${candidatesHtml}
                         </div>
                     </div>
@@ -676,62 +676,75 @@
 
     function updateCardUI(id, groupId, isSelected) {
         const selectedAction = selections[id];
+        
+        // --- 1. Handle ACCEPT Button (Candidate Column) ---
         const btnAccept = document.getElementById(`btn-accept-${id}`);
         const iconAccept = document.getElementById(`icon-accept-${id}`);
 
         if (btnAccept && iconAccept) {
             const isSingleView = btnAccept.classList.contains('w-full');
+            // Reset all state classes first to ensure clean slate
+            btnAccept.classList.remove(
+                'bg-green-600', 'text-white', 'border-green-600', 'hover:bg-green-700', 'opacity-100', // Active
+                'bg-gray-100', 'hover:bg-green-100', 'text-green-700', 'border-green-200', 'bg-white', 'opacity-80' // Inactive
+            );
+            iconAccept.classList.remove('fas', 'far', 'fa-check-circle', 'fa-circle');
+
             if (isSelected && selectedAction === 'keep_new') {
-                btnAccept.classList.remove('bg-gray-100', 'hover:bg-green-100', 'text-green-700', 'border-green-200', 'bg-white', 'opacity-80');
+                // ACTIVE STATE
                 btnAccept.classList.add('bg-green-600', 'text-white', 'border-green-600', 'hover:bg-green-700', 'opacity-100');
-                iconAccept.classList.replace('fa-circle', 'fa-check-circle');
-                iconAccept.classList.remove('far');
-                iconAccept.classList.add('fas');
+                iconAccept.classList.add('fas', 'fa-check-circle');
             } else {
-                btnAccept.classList.remove('bg-green-600', 'text-white', 'border-green-600', 'hover:bg-green-700', 'opacity-100');
+                // INACTIVE STATE
                 if (isSingleView) {
                     btnAccept.classList.add('bg-white', 'text-green-700', 'border-green-200', 'opacity-80', 'hover:opacity-100');
                 } else {
                     btnAccept.classList.add('bg-gray-100', 'hover:bg-green-100', 'text-green-700', 'border-green-200');
                 }
-                iconAccept.classList.replace('fa-check-circle', 'fa-circle');
-                iconAccept.classList.add('far');
-                iconAccept.classList.remove('fas');
+                iconAccept.classList.add('far', 'fa-circle');
             }
         }
 
+        // --- 2. Handle REJECT Button (Current File Column) ---
+        // Note: The reject button is tied to the first candidate's ID for "Keep Old" action
         const btnReject = document.getElementById(`btn-reject-${id}`);
         const iconReject = document.getElementById(`icon-reject-${id}`);
 
         if (btnReject && iconReject) {
+            // Reset all state classes
+            btnReject.classList.remove(
+                'bg-red-600', 'text-white', 'border-red-600', 'hover:bg-red-700', 'opacity-100', 'shadow-md', // Active
+                'opacity-80', 'hover:opacity-100', 'bg-white', 'shadow-sm', 'text-red-700' // Inactive
+            );
+            iconReject.classList.remove('fas', 'far', 'fa-check-circle', 'fa-circle');
+
             if (isSelected && selectedAction === 'keep_old') {
-                btnReject.classList.remove('opacity-80', 'hover:opacity-100', 'bg-white', 'shadow-sm', 'text-red-700');
+                // ACTIVE STATE
                 btnReject.classList.add('bg-red-600', 'text-white', 'border-red-600', 'hover:bg-red-700', 'opacity-100', 'shadow-md');
-                iconReject.classList.replace('fa-circle', 'fa-check-circle');
-                iconReject.classList.remove('far');
-                iconReject.classList.add('fas');
+                iconReject.classList.add('fas', 'fa-check-circle');
             } else {
+                // INACTIVE STATE
                 btnReject.classList.add('opacity-80', 'hover:opacity-100', 'bg-white', 'shadow-sm', 'text-red-700');
-                btnReject.classList.remove('bg-red-600', 'text-white', 'border-red-600', 'hover:bg-red-700', 'opacity-100', 'shadow-md');
-                iconReject.classList.replace('fa-check-circle', 'fa-circle');
-                iconReject.classList.add('far');
-                iconReject.classList.remove('fas');
+                iconReject.classList.add('far', 'fa-circle');
             }
         }
 
+        // --- 3. Handle Card Outline (Main Card) ---
         const card = document.getElementById(`card-${groupId}`);
         if (card) {
-            if (groupSelections[groupId]) {
-                const selectedAction = selections[groupSelections[groupId]];
-                card.classList.remove('ring-2', 'ring-green-500', 'ring-red-500');
+            card.classList.remove('ring-2', 'ring-green-500', 'ring-red-500'); // Reset
 
-                if (selectedAction === 'keep_new') {
+            if (groupSelections[groupId]) {
+                const activeId = groupSelections[groupId]; // Which global ID (candidate) is active here?
+                // We need to know the ACTION associated with that ID, but we only have `id` passed to this function.
+                // However, `groupSelections[groupId]` gives us the ID currently dominating the card.
+                const action = selections[activeId];
+                
+                if (action === 'keep_new') {
                     card.classList.add('ring-2', 'ring-green-500');
-                } else {
+                } else if (action === 'keep_old') {
                     card.classList.add('ring-2', 'ring-red-500');
                 }
-            } else {
-                card.classList.remove('ring-2', 'ring-green-500', 'ring-red-500');
             }
         }
     }
