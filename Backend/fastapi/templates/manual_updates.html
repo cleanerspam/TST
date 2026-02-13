@@ -58,6 +58,31 @@
             background-size: 200% 100%;
             animation: shimmer 2s infinite linear;
         }
+
+        /* Consistent Card Heights */
+        .card-fixed-height {
+            min-height: 450px;
+        }
+
+        .candidate-scroll {
+            scroll-snap-type: y mandatory;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .candidate-full {
+            scroll-snap-align: start;
+            min-height: 85%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .candidate-full-single {
+            scroll-snap-align: start;
+            min-height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
     </style>
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
         <div>
@@ -461,110 +486,66 @@
             }
 
             const card = document.createElement('div');
-            card.className = "theme-card rounded-lg overflow-hidden shadow-lg border border-gray-700/50 mb-3";
+            card.className = "theme-card rounded-lg overflow-hidden shadow-lg border border-gray-700/50 mb-6 card-fixed-height";
             card.id = `card-${cardId}`;
             card.setAttribute('data-pending-id', cardId);
 
-            // DECIDE LAYOUT BASED ON CANDIDATE COUNT
-            let rightColumnHtml = '';
-
-            if (item.candidates.length === 1) {
-                // --- SINGLE CANDIDATE LAYOUT ---
-                const cand = item.candidates[0];
+            // --- UNIFIED LAYOUT FOR ALL CANDIDATES ---
+            // Generate full-height candidate cards
+            let candidatesHtml = '';
+            const isSingleCandidate = item.candidates.length === 1;
+            item.candidates.forEach((cand, index) => {
                 const newFile = cand.new_file;
                 const cid = cand._id;
+                const fName = newFile.file_name || newFile.name || 'Unknown';
 
-                rightColumnHtml = `
-                    <div class="flex flex-col h-full candidate-col">
-                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">Proposed File</h4>
-                        <div class="bg-green-50 p-4 rounded border border-green-200 relative group flex-1 flex flex-col overflow-hidden">
-                            <div class="flex justify-end mb-2">
-                                <span class="text-green-600 text-xs font-bold uppercase tracking-wider">New</span>
+                candidatesHtml += `
+                    <div class="${isSingleCandidate ? 'candidate-full-single' : 'candidate-full'} p-4 bg-green-50 rounded border border-green-200 relative" data-candidate-id="${cid}">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="text-green-600 text-xs font-bold uppercase tracking-wider">Option ${index + 1}/${item.candidates.length}</span>
+                            <span class="text-[10px] text-gray-500">${new Date(cand.created_at).toLocaleDateString()}</span>
+                        </div>
+
+                        <div class="space-y-4 flex-1">
+                            <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
+                                ${fName}
                             </div>
-
-                            <div class="space-y-4 flex-1 overflow-y-auto pr-2 custom-scrollbar">
-                                <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
-                                    ${newFile.file_name || newFile.name || 'Unknown'}
+                            <div class="flex flex-col text-xs text-gray-600 space-y-1">
+                                <div class="flex justify-between items-center">
+                                    <span>Size: <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span></span>
+                                    ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
+                                    <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
                                 </div>
-                                <div class="flex flex-col text-xs text-gray-600 space-y-1">
-                                    <div class="flex justify-between items-center">
-                                        <span>Size: <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span></span>
-                                        ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
-                                        <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
-                                    </div>
-                                     <div class="text-[10px] italic text-gray-400 mt-1">Added: ${new Date(cand.created_at).toLocaleDateString()}</div>
-                                </div>
-                                <!-- Score Breakdown Section -->
-                                <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-${cid}">
-                                    <!-- Points injected here -->
-                                </div>
+                            </div>
+                            <!-- Score Breakdown Section -->
+                            <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-${cid}">
+                                <!-- Points injected here -->
                             </div>
                         </div>
 
                         <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')"
                             id="btn-accept-${cid}"
                             data-group-id="${cardId}"
-                            class="mt-3 w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
+                            class="mt-auto w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
                             <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
-                            <span class="font-bold">Accept New File</span>
+                            <span class="font-bold">Accept This Candidate</span>
                         </button>
-                        <p class="text-xs text-center text-gray-400 mt-2">Replaces current file</p>
                     </div>
                 `;
-            } else {
-                // --- MULTIPLE CANDIDATES LAYOUT ---
-                let candidatesHtml = '';
-                item.candidates.forEach(cand => {
-                    const newFile = cand.new_file;
-                    const cid = cand._id;
-                    const fName = newFile.file_name || newFile.name || 'Unknown';
+            });
 
-                    candidatesHtml += `
-                        <div class="bg-white/5 p-3 rounded border border-gray-700 mb-3 last:mb-0 relative transition-all overflow-hidden flex-shrink-0" data-candidate-id="${cid}">
-                            <div class="flex justify-between items-start mb-2">
-                                <div class="text-xs break-all text-gray-900 font-mono bg-white border border-gray-200 p-2 rounded leading-relaxed shadow-sm w-full mr-2">
-                                    ${fName}
-                                </div>
-                                <div class="flex-shrink-0">
-                                    <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')"
-                                        id="btn-accept-${cid}"
-                                        data-group-id="${cardId}"
-                                        class="flex items-center space-x-1 px-3 py-2 rounded bg-white hover:bg-green-50 text-green-700 border border-green-200 shadow-sm transition-all opacity-90 hover:opacity-100">
-                                        <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
-                                        <span class="font-bold text-xs">Accept</span>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="flex items-center text-xs text-gray-400 gap-3">
-                                 <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span>
-                                 ${newFile.dc_id ? `<span class="bg-gray-200 px-1 rounded text-gray-700 border border-gray-300" title="Data Center ID">DC: ${newFile.dc_id}</span>` : ''}
-                                 <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
-                                 <span class="text-[10px] italic text-gray-500">Added: ${new Date(cand.created_at).toLocaleDateString()}</span>
-                            </div>
-                            <!-- Score Breakdown Section -->
-                            <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden overflow-y-auto max-h-20 custom-scrollbar" id="score-breakdown-${cid}">
-                                <!-- Points injected here -->
-                            </div>
-                        </div>
-                    `;
-                });
-
-                rightColumnHtml = `
-                    <div class="flex flex-col bg-transparent h-full min-h-0 candidate-col relative group/list">
-                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1 flex justify-between">
-                            <span>Candidates (${item.candidates.length})</span>
-                        </h4>
-                        
-                        <!-- Candidate List (Fill Height) -->
-                        <div class="flex-col space-y-3 flex-1 overflow-y-auto pr-2 custom-scrollbar relative scroll-smooth" id="candidate-list-${cardId}">
-                            ${candidatesHtml}
-                        </div>
-                        
-                        <!-- Scroll Shadow Hint (Visible if more items) -->
-                         <div class="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-gray-100 to-transparent pointer-events-none opacity-0 group-hover/list:opacity-100 transition-opacity ${item.candidates.length > 1 ? '' : 'hidden'}"></div>
+            const rightColumnHtml = `
+                <div class="flex flex-col h-full candidate-col">
+                    <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1">
+                        <span>Candidates (${item.candidates.length})</span>
+                    </h4>
+                    
+                    <!-- Scrollable Candidate List -->
+                    <div class="candidate-scroll flex-1 custom-scrollbar pr-2 space-y-3" id="candidate-list-${cardId}">
+                        ${candidatesHtml}
                     </div>
-                `;
-            }
+                </div>
+            `;
 
 
             card.innerHTML = `
