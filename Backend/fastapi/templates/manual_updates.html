@@ -73,16 +73,16 @@
 
         .candidate-full {
             scroll-snap-align: start;
-            min-height: 85%;
-            max-height: 85%;
+            height: 85%;
+            flex-shrink: 0;
             display: flex;
             flex-direction: column;
         }
 
         .candidate-full-single {
             scroll-snap-align: start;
-            min-height: 100%;
-            max-height: 100%;
+            height: 100%;
+            flex-shrink: 0;
             display: flex;
             flex-direction: column;
         }
@@ -521,17 +521,17 @@
 
                 candidatesHtml += `
                     <div class="${isSingleCandidate ? 'candidate-full-single' : 'candidate-full'} flex flex-col" data-candidate-id="${cid}">
-                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-2 px-1">
+                        <h4 class="text-[11px] font-bold text-gray-700 uppercase mb-1.5 px-1">
                             Option ${index + 1}/${item.candidates.length}
                             <span class="text-[10px] text-gray-500 font-normal ml-2">${new Date(cand.created_at).toLocaleDateString()}</span>
                         </h4>
                         
-                        <div class="bg-green-50 p-4 rounded border border-green-200 flex-1 overflow-hidden flex flex-col">
-                            <div class="flex justify-end mb-2">
-                                <span class="text-green-600 text-xs font-bold uppercase tracking-wider">New</span>
+                        <div class="bg-green-50 p-3 rounded border border-green-200 flex-1 overflow-hidden flex flex-col">
+                            <div class="flex justify-end mb-1.5">
+                                <span class="text-green-600 text-[11px] font-bold uppercase tracking-wider">New</span>
                             </div>
                             
-                            <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+                            <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
                                 <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
                                     ${fName}
                                 </div>
@@ -549,15 +549,15 @@
                             </div>
                         </div>
 
-                        <div class="mt-3">
+                        <div class="mt-2 flex-shrink-0">
                             <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')"
                                 id="btn-accept-${cid}"
                                 data-group-id="${cardId}"
-                                class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
+                                class="w-full flex items-center justify-center space-x-2 px-4 py-2.5 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
                                 <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
-                                <span class="font-bold">Accept This Candidate</span>
+                                <span class="font-bold text-sm">Accept This Candidate</span>
                             </button>
-                            <p class="text-xs text-center text-gray-400 mt-2">Replaces current file</p>
+                            <p class="text-[11px] text-center text-gray-400 mt-1.5">Replaces current file</p>
                         </div>
                     </div>
                 `;
