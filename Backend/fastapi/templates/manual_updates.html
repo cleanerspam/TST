@@ -74,6 +74,7 @@
         .candidate-full {
             scroll-snap-align: start;
             min-height: 85%;
+            max-height: 85%;
             display: flex;
             flex-direction: column;
         }
@@ -81,8 +82,15 @@
         .candidate-full-single {
             scroll-snap-align: start;
             min-height: 100%;
+            max-height: 100%;
             display: flex;
             flex-direction: column;
+        }
+
+        .candidate-content-scrollable {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
         }
     </style>
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
@@ -507,7 +515,7 @@
                             <span class="text-[10px] text-gray-500">${new Date(cand.created_at).toLocaleDateString()}</span>
                         </div>
 
-                        <div class="space-y-4 flex-1">
+                        <div class="candidate-content-scrollable space-y-4">
                             <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
                                 ${fName}
                             </div>
@@ -527,7 +535,7 @@
                         <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')"
                             id="btn-accept-${cid}"
                             data-group-id="${cardId}"
-                            class="mt-auto w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
+                            class="mt-3 w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700 flex-shrink-0">
                             <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
                             <span class="font-bold">Accept This Candidate</span>
                         </button>
