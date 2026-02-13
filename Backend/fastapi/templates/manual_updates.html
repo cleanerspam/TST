@@ -539,7 +539,6 @@
                                  <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span>
                                  ${newFile.dc_id ? `<span class="bg-gray-200 px-1 rounded text-gray-700 border border-gray-300" title="Data Center ID">DC: ${newFile.dc_id}</span>` : ''}
                                  <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
-                                 <span id="source-badge-${cid}" class="uppercase bg-gray-100 px-1 rounded text-gray-500 border border-gray-200 text-[10px] font-bold tracking-wide shadow-sm" title="Probe Method">${cand.source || 'Filename Probe'}</span>
                                  <span class="text-[10px] italic text-gray-500">Added: ${new Date(cand.created_at).toLocaleDateString()}</span>
                             </div>
                             <!-- Score Breakdown Section -->
@@ -554,7 +553,6 @@
                     <div class="flex flex-col bg-transparent h-full min-h-0 candidate-col relative group/list">
                         <h4 class="text-sm font-bold text-gray-700 uppercase mb-3 px-1 flex justify-between">
                             <span>Candidates (${item.candidates.length})</span>
-                            <span class="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full ${item.candidates.length > 1 ? '' : 'hidden'}">Scroll for more</span>
                         </h4>
                         
                         <!-- Candidate List (Fill Height) -->
@@ -626,8 +624,6 @@
                                                 <span>Size: <span class="text-gray-900 font-bold">${oldFile.file_size || oldFile.size || 'N/A'}</span></span>
                                                 ${oldFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300" title="Data Center ID">DC: <span class="text-gray-900 font-bold">${oldFile.dc_id}</span></span>` : ''}
                                                  <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${fType}</span>
-                                                 <!-- Source Badge -->
-                                                 <span id="source-badge-old-${cardId}" class="uppercase bg-gray-100 px-1 rounded text-gray-500 border border-gray-200 text-[10px] font-bold tracking-wide shadow-sm ml-2" title="Probe Method">${oldFile.source || 'Filename Probe'}</span>
                                             </div>
                                         </div>
                                         <!-- Score Breakdown Section (Old) -->

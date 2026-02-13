@@ -78,7 +78,7 @@ class QualityArbiter:
         # Preferred Uploaders List (Ranked High to Low)
         PREFERRED_UPLOADERS = ["psa", "immortal", "asur", "Ospreay", "mkvcinemas", "pahe", "skymovieshd"]
         
-        filename = file_info.get("filename", file_info.get("name", "")).lower()
+        filename = str(file_info.get("filename") or file_info.get("name") or "").lower()
         uploader_bonus = 300 # Default for non-preferred
         found_uploader = None
         
@@ -131,7 +131,7 @@ class QualityArbiter:
             breakdown.append("Perfect Combo: Dual Audio + Eng Subs (+250)")
 
         # Container Rules
-        container = probe_data.get("container", "").lower()
+        container = str(probe_data.get("container") or "").lower()
         if "mkv" in container or filename.endswith(".mkv"):
             score += 100
             breakdown.append("MKV Container (+100)")
@@ -145,7 +145,7 @@ class QualityArbiter:
         # 3. Video Rules
         # ---------------------------------------------------------------------
         # Codec
-        v_codec = probe_data.get("video", {}).get("codec", "").lower()
+        v_codec = str(probe_data.get("video", {}).get("codec") or "").lower()
         if not v_codec and semantic_tags.get("is_hevc"): v_codec = "hevc"
         
         if "hevc" in v_codec or "h265" in v_codec:
@@ -187,7 +187,7 @@ class QualityArbiter:
             
         # Language Analysis
         langs = [t.get("lang", "und") for t in audio_tracks]
-        titles = [t.get("title", "").lower() for t in audio_tracks]
+        titles = [str(t.get("title") or "").lower() for t in audio_tracks]
         
         has_hin = any("hi" in l or "hin" in l for l in langs) or semantic_tags.get("is_dual_audio")
         has_eng = any("en" in l or "eng" in l for l in langs)
@@ -204,7 +204,7 @@ class QualityArbiter:
             
         # Codec Analysis
         # Just check if ANY track is good
-        codecs = [t.get("codec", "").lower() for t in audio_tracks]
+        codecs = [str(t.get("codec") or "").lower() for t in audio_tracks]
         
         if any(c == "aac" for c in codecs) or semantic_tags.get("has_aac"):
             score += 100
