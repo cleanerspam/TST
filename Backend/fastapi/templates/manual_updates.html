@@ -520,39 +520,44 @@
                 const fName = newFile.file_name || newFile.name || 'Unknown';
 
                 candidatesHtml += `
-                    <div class="${isSingleCandidate ? 'candidate-full-single' : 'candidate-full'} bg-green-50 rounded border border-green-200 relative overflow-hidden" data-candidate-id="${cid}">
-                        <div class="p-4 pb-0">
-                            <div class="flex justify-between items-center mb-2">
-                                <span class="text-green-600 text-xs font-bold uppercase tracking-wider">Option ${index + 1}/${item.candidates.length}</span>
-                                <span class="text-[10px] text-gray-500">${new Date(cand.created_at).toLocaleDateString()}</span>
+                    <div class="${isSingleCandidate ? 'candidate-full-single' : 'candidate-full'} flex flex-col" data-candidate-id="${cid}">
+                        <h4 class="text-sm font-bold text-gray-700 uppercase mb-2 px-1">
+                            Option ${index + 1}/${item.candidates.length}
+                            <span class="text-[10px] text-gray-500 font-normal ml-2">${new Date(cand.created_at).toLocaleDateString()}</span>
+                        </h4>
+                        
+                        <div class="bg-green-50 p-4 rounded border border-green-200 flex-1 overflow-hidden flex flex-col">
+                            <div class="flex justify-end mb-2">
+                                <span class="text-green-600 text-xs font-bold uppercase tracking-wider">New</span>
                             </div>
-                        </div>
-
-                        <div class="candidate-content-scrollable px-4 space-y-4">
-                            <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
-                                ${fName}
-                            </div>
-                            <div class="flex flex-col text-xs text-gray-600 space-y-1">
-                                <div class="flex justify-between items-center">
-                                    <span>Size: <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span></span>
-                                    ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
-                                    <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
+                            
+                            <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
+                                <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
+                                    ${fName}
+                                </div>
+                                <div class="flex flex-col text-xs text-gray-600 space-y-1">
+                                    <div class="flex justify-between items-center">
+                                        <span>Size: <span class="text-gray-900 font-bold">${newFile.file_size || newFile.size || 'N/A'}</span></span>
+                                        ${newFile.dc_id ? `<span class="text-[10px] uppercase bg-gray-200 px-1 rounded text-gray-700 mx-2 border border-gray-300">DC: <span class="text-gray-900 font-bold">${newFile.dc_id}</span></span>` : ''}
+                                        <span class="uppercase bg-blue-600 text-white px-2 py-0.5 rounded text-[10px] font-bold tracking-wide shadow-sm">${newFile.file_type || 'Unknown'}</span>
+                                    </div>
+                                </div>
+                                <!-- Score Breakdown Section -->
+                                <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-${cid}">
+                                    <!-- Points injected here -->
                                 </div>
                             </div>
-                            <!-- Score Breakdown Section -->
-                            <div class="score-breakdown-container mt-2 pt-2 border-t border-white/5 text-[10px] theme-text-secondary hidden" id="score-breakdown-${cid}">
-                                <!-- Points injected here -->
-                            </div>
                         </div>
 
-                        <div class="candidate-button-sticky">
+                        <div class="mt-3">
                             <button onclick="toggleSelection('${cid}', 'keep_new', '${cardId}')"
                                 id="btn-accept-${cid}"
                                 data-group-id="${cardId}"
-                                class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-white bg-white shadow-md text-green-700">
+                                class="w-full flex items-center justify-center space-x-2 px-4 py-3 rounded transition-all border border-green-200 opacity-80 hover:opacity-100 hover:bg-green-50 bg-white shadow-sm text-green-700">
                                 <i class="far fa-circle text-lg" id="icon-accept-${cid}"></i>
                                 <span class="font-bold">Accept This Candidate</span>
                             </button>
+                            <p class="text-xs text-center text-gray-400 mt-2">Replaces current file</p>
                         </div>
                     </div>
                 `;
@@ -565,7 +570,7 @@
                     </h4>
                     
                     <!-- Scrollable Candidate List -->
-                    <div class="candidate-scroll flex-1 custom-scrollbar pr-2 space-y-3" id="candidate-list-${cardId}">
+                    <div class="candidate-scroll flex-1 custom-scrollbar pr-2 space-y-4" id="candidate-list-${cardId}">
                         ${candidatesHtml}
                     </div>
                 </div>
