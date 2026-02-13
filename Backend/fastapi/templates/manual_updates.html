@@ -521,18 +521,13 @@
 
                 candidatesHtml += `
                     <div class="${isSingleCandidate ? 'candidate-full-single' : 'candidate-full'} flex flex-col" data-candidate-id="${cid}">
-                        <div class="bg-green-50 p-3 rounded border border-green-200 flex-1 overflow-hidden flex flex-col">
-                            <div class="flex justify-between items-center mb-2 pb-2 border-b border-green-200">
-                                <h4 class="text-[11px] font-bold text-gray-700 uppercase">
-                                    Option ${index + 1}/${item.candidates.length}
-                                </h4>
-                                <div class="flex items-center gap-2">
-                                    <span class="text-[10px] text-gray-500">${new Date(cand.created_at).toLocaleDateString()}</span>
-                                    <span class="text-green-600 text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 bg-green-100 rounded">Option ${index + 1}</span>
-                                </div>
+                        <div class="bg-green-50 p-3 rounded border border-green-200 flex-1 min-h-0 overflow-hidden flex flex-col">
+                            <div class="flex justify-between items-center mb-2 pb-2 border-b border-green-200 flex-shrink-0">
+                                <span class="text-[10px] text-gray-500">${new Date(cand.created_at).toLocaleDateString()}</span>
+                                <span class="text-green-600 text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 bg-green-100 rounded">Option ${index + 1}</span>
                             </div>
                             
-                            <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
+                            <div class="flex-1 min-h-0 overflow-y-auto pr-2 custom-scrollbar space-y-2">
                                 <div class="text-xs break-all text-gray-900 font-mono bg-white border border-green-100 p-2 rounded leading-relaxed min-h-[3rem] shadow-sm">
                                     ${fName}
                                 </div>
