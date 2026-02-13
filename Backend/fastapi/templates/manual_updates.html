@@ -476,6 +476,13 @@
 
             if (currentPage === 2 && document.getElementById('updates-grid').children.length === 0) {
                 document.getElementById('empty-state').classList.remove('hidden');
+
+                // Auto-disable analysis if complete
+                if (sessionStorage.getItem('autoResolveMode') === 'true') {
+                    // Turn it off
+                    toggleAutoResolveMode();
+                    showToast('Analysis complete: All caught up!', 'success');
+                }
             }
         }
     }
